@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.venv/
+
+# Environments (pixi.lock is the lock; uv.lock is not used)
+.pixi/
+uv.lock
+
+# Run outputs (/storage, not storage/, also matches a symlink)
+/storage
+runs/
+logs/
+*.log
+*.out
+*.pt
+*.pth
+
+# Local evaluation and export outputs
+/checkpoints/
+/results/
+/exports/
+
+# Site paths (template: .env.example)
+.env
+
+# Simulator and tool outputs
+MUJOCO_LOG.TXT
+wandb/
+.ipynb_checkpoints/

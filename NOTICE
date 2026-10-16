@@ -1,0 +1,56 @@
+REKI
+Copyright (c) 2026 Kyutai. Licensed under the MIT License (see LICENSE).
+
+This repository includes files and parts of files from third-party projects under the Apache
+License, Version 2.0 (see LICENSE-APACHE, or http://www.apache.org/licenses/LICENSE-2.0). Each
+file keeps or states its original copyright and license.
+
+This repository also includes material from third-party projects under the MIT License (see the
+entries below).
+
+reki/policy/flow_utils.py
+  From LeRobot (https://github.com/huggingface/lerobot @ aa9cc9bd43e9eba92a32aaadde2a09c90b5836cf),
+  src/lerobot/policies/pi05/modeling_pi05.py.
+  Copyright 2025 Physical Intelligence and The HuggingFace Inc. team. Apache License 2.0.
+
+reki/vlm/adarms_base.py
+  From LeRobot (https://github.com/huggingface/lerobot @ aa9cc9bd43e9eba92a32aaadde2a09c90b5836cf),
+  src/lerobot/policies/pi_gemma.py.
+  Copyright 2025 Physical Intelligence and The HuggingFace Inc. team. Apache License 2.0.
+
+reki/data/robotics/lerobot_patches.py (parts)
+  Adapted from LeRobot (https://github.com/huggingface/lerobot @ aa9cc9bd43e9eba92a32aaadde2a09c90b5836cf):
+  the two uint8 decoders and _BoundedDecoderCache from src/lerobot/datasets/video_utils.py,
+  dedup_video_check from src/lerobot/datasets/dataset_reader.py. Changed: uint8 output, bounded
+  decoder cache, one stat per video file.
+  Copyright 2024 The HuggingFace Inc. team. Apache License 2.0.
+
+reki/vlm/qwen3_5/hf_patches.py (parts)
+  Adapted from Transformers (https://github.com/huggingface/transformers @ v5.3.0),
+  src/transformers/models/qwen3_5/modeling_qwen3_5.py: _packed_gdn_forward from
+  Qwen3_5GatedDeltaNet.forward, _PackedQwen3_5DecoderLayer.forward from
+  Qwen3_5DecoderLayer.forward, and the attention forward of install_vision_varlen from
+  Qwen3_5VisionAttention.forward. Changed: sequence packing, no cache path, varlen attention.
+  Copyright 2025 The Qwen Team and The HuggingFace Inc. team. Apache License 2.0.
+
+reki/vlm/qwen3_5/inference.py (parts)
+  Adapted from Transformers (https://github.com/huggingface/transformers @ v5.3.0),
+  src/transformers/models/qwen3_5/modeling_qwen3_5.py: _rope1 from apply_rotary_pos_emb.
+  Changed: rotates one tensor.
+  Copyright 2025 The Qwen Team and The HuggingFace Inc. team. Apache License 2.0.
+
+reki/vlm/qwen3_5/image_processor.py (parts)
+  smart_resize adapted from Transformers (https://github.com/huggingface/transformers @ v5.3.0),
+  src/transformers/models/qwen2_vl/image_processing_qwen2_vl.py. Changed: no aspect-ratio check.
+  Copyright 2024 The Qwen team, Alibaba Group and the HuggingFace Inc. team. Apache License 2.0.
+
+scripts/eval/robotwin_arm_tag_fix.patch, scripts/eval/robotwin_clutter_fix.patch,
+scripts/eval/robotwin_model_ids_fix.patch
+  Patches to RoboTwin (https://github.com/RoboTwin-Platform/RoboTwin @
+  c3ddfa8b97d5519efa828b075999bd0006778e5e).
+  Copyright (c) 2025 Tianxing Chen. MIT License.
+
+reki/eval/robocasa365_protocol.py (task lists)
+  From RoboCasa (https://github.com/robocasa/robocasa @ b4684e6ee37d377cc392e98302a6b916d588b415, v1.0.1),
+  robocasa.utils.dataset_registry.TARGET_TASKS.
+  Copyright (c) 2026 the RoboCasa Team. MIT License.

@@ -1,0 +1,111 @@
+# Reference pretraining recipe of kyutai/reki-2b.
+# The pretraining code that runs it comes in a later update.
+vlm_model_id: Qwen/Qwen3.5-2B
+dataset:
+- oxe_reduced
+- droid
+- agibot
+- robomind
+- galaxea
+- roboset_delta
+- rdt
+- robocoin
+- groot
+- interndata
+- abc
+- egodex
+- egoverse
+- xperience
+chunk_size: 50
+chunk_duration_s: 1.0
+action_pace:
+  egodex: 0.6
+  egoverse: 0.25
+language_diversity_path: scripts/data/language_diversity_reannotated.json
+vision_diversity_path: scripts/data/vision_diversity.json
+vision_alpha: 0.35
+max_epochs_per_dataset: 4
+video_backend: torchcodec
+steps: 200000
+batch_size: 30
+num_workers: 12
+lr: 0.0001
+min_lr: 2.0e-06
+warmup_steps: 5000
+lr_schedule: wsd
+decay_steps: 0
+ema_decay: 0.999
+vl_datasets:
+- finevision_for_robotics
+- robopoint
+- refspatial
+- pixmo
+vl_ratio: 0.1
+max_text_tokens: 26000
+train_vision_blocks: 4
+backbone_lr_scale: 0.1
+gradient_checkpointing: true
+image_size: 448
+aug_color_jitter: 0.2
+aug_random_crop: 0.95
+aug_random_scale: true
+mirror_prob: 0.0
+ce_loss_weight: 0.1
+flow_draws: 8
+flow_loss_dof_balanced: true
+action_expert_hidden_size: 768
+action_expert_intermediate_size: 3072
+action_expert_num_layers: 10
+action_expert_num_heads: 12
+state_encoding: adaln
+unify_ee_euler_rotation: true
+state_mlp_embodiments:
+  g2a: 24
+  franka: 8
+  ur5e: 7
+  single_arm_ee_euler: 8
+  single_arm_ee_quat: 8
+  bimanual_joint: 16
+  bimanual_dexterous: 26
+  agilex: 14
+  r1lite: 17
+  aloha: 14
+  yam: 14
+  gr1: 29
+  airbot_mmk2: 24
+  unitree_g1: 28
+history_k: 3
+max_cameras: null
+camera_dropout_prob: 0.15
+shuffle_cameras: true
+drop_extra_side_cameras: true
+drop_static_wrist_camera: true
+action_expert_num_registers: 32
+ddp_find_unused_parameters: true
+ddp_bucket_cap_mb: 256
+# The pretraining run sharded the optimizer state with ZeRO-1, which this release does not include.
+optimizer_master_weights: true
+predict_subtask: true
+subtask_lookup_filename: subtask_lookup_reannotated.jsonl
+use_speed_metadata: true
+save_steps: 5000
+logging_steps: 20
+val_dataset: libero
+weight_overrides:
+  robocoin_galbot: 0.5
+  robocoin_airbot_mmk2: 0.5
+  robocoin_agilex_14: 0.5
+  robocoin_agilex_26: 0.5
+  robocoin_agilex_26b: 0.5
+  robocoin_r1lite: 0.5
+  robocoin_galaxea_r1lite: 0.5
+  robocoin_a2d_41: 0.5
+  robocoin_a2d_17: 0.5
+  robocoin_realman_schemaA: 0.5
+  robocoin_realman_schemaB: 0.5
+  robocoin_unitree_g1_28: 0.5
+  robocoin_unitree_g1_30: 0.5
+  robocoin_leju: 0.5
+  interndata_franka: 0.5
+  interndata_split_aloha: 0.5
+  interndata_genie1: 0.5

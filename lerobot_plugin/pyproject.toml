@@ -1,0 +1,22 @@
+[project]
+name = "lerobot_policy_reki"
+version = "0.1.0"
+description = "LeRobot policy plugin for reki (inference and lerobot-eval only)"
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Kyutai" }]
+requires-python = ">=3.12,<3.13"
+dependencies = ["reki", "gymnasium"]
+
+[project.urls]
+Homepage = "https://kyutai.org/reki"
+Repository = "https://github.com/kyutai-labs/reki"
+Models = "https://huggingface.co/collections/kyutai/reki-6ac371366b3da8cdece73ce2"
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["lerobot_policy_reki"]
+package-dir = { lerobot_policy_reki = "." }

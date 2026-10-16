@@ -1,0 +1,251 @@
+{
+ "_provenance": "footprint->{fl,fr}_link6 kinematic chains extracted from RoboTwin aloha-agilex arx5_description_isaac.urdf (embodiments assets, 2026-07). Each entry is one joint in order: fixed origin (xyz, rpy) and, for revolute joints, the rotation axis. Used only to prove the ALOHA mirror sign reproduces a sagittal reflection.",
+ "chains": {
+  "fl": [
+   {
+    "xyz": [
+     0.2305,
+     0.297,
+     0.782
+    ],
+    "rpy": [
+     0.0,
+     0.0,
+     0.02
+    ],
+    "revolute": false
+   },
+   {
+    "xyz": [
+     0.0,
+     0.0,
+     0.058
+    ],
+    "rpy": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "revolute": true,
+    "axis": [
+     0.0,
+     0.0,
+     1.0
+    ]
+   },
+   {
+    "xyz": [
+     0.025013,
+     0.00060169,
+     0.042
+    ],
+    "rpy": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "revolute": true,
+    "axis": [
+     0.0,
+     1.0,
+     0.0
+    ]
+   },
+   {
+    "xyz": [
+     -0.26396,
+     0.0044548,
+     0.0
+    ],
+    "rpy": [
+     -3.1416,
+     0.0,
+     -0.015928
+    ],
+    "revolute": true,
+    "axis": [
+     0.0,
+     1.0,
+     0.0
+    ]
+   },
+   {
+    "xyz": [
+     0.246,
+     -0.00025,
+     -0.06
+    ],
+    "rpy": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "revolute": true,
+    "axis": [
+     0.0,
+     1.0,
+     0.0
+    ]
+   },
+   {
+    "xyz": [
+     0.06775,
+     0.0015,
+     -0.0855
+    ],
+    "rpy": [
+     0.0,
+     0.0,
+     -0.015928
+    ],
+    "revolute": true,
+    "axis": [
+     0.0,
+     0.0,
+     1.0
+    ]
+   },
+   {
+    "xyz": [
+     0.03095,
+     0.0,
+     0.0855
+    ],
+    "rpy": [
+     -3.1416,
+     0.0,
+     0.0
+    ],
+    "revolute": true,
+    "axis": [
+     1.0,
+     0.0,
+     0.0
+    ]
+   }
+  ],
+  "fr": [
+   {
+    "xyz": [
+     0.2315,
+     -0.3063,
+     0.781
+    ],
+    "rpy": [
+     0.0,
+     0.0,
+     0.01
+    ],
+    "revolute": false
+   },
+   {
+    "xyz": [
+     0.0,
+     0.0,
+     0.058
+    ],
+    "rpy": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "revolute": true,
+    "axis": [
+     0.0,
+     0.0,
+     1.0
+    ]
+   },
+   {
+    "xyz": [
+     0.025013,
+     0.00060169,
+     0.042
+    ],
+    "rpy": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "revolute": true,
+    "axis": [
+     0.0,
+     1.0,
+     0.0
+    ]
+   },
+   {
+    "xyz": [
+     -0.26396,
+     0.0044548,
+     0.0
+    ],
+    "rpy": [
+     -3.1416,
+     0.0,
+     -0.015928
+    ],
+    "revolute": true,
+    "axis": [
+     0.0,
+     1.0,
+     0.0
+    ]
+   },
+   {
+    "xyz": [
+     0.246,
+     -0.00025,
+     -0.06
+    ],
+    "rpy": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "revolute": true,
+    "axis": [
+     0.0,
+     1.0,
+     0.0
+    ]
+   },
+   {
+    "xyz": [
+     0.06775,
+     0.0015,
+     -0.0855
+    ],
+    "rpy": [
+     0.0,
+     0.0,
+     -0.015928
+    ],
+    "revolute": true,
+    "axis": [
+     0.0,
+     0.0,
+     1.0
+    ]
+   },
+   {
+    "xyz": [
+     0.03095,
+     0.0,
+     0.0855
+    ],
+    "rpy": [
+     -3.1416,
+     0.0,
+     0.0
+    ],
+    "revolute": true,
+    "axis": [
+     1.0,
+     0.0,
+     0.0
+    ]
+   }
+  ]
+ }
+}
