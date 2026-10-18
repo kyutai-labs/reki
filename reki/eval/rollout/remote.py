@@ -60,7 +60,7 @@ class RemoteEnv:
             self.conn.settimeout(self.timeouts[msg["cmd"]])
         return sim_protocol.rpc(self.conn, msg)
 
-    def reset(self, seed: int) -> dict:
+    def reset(self, seed: int, episode: int = 0) -> dict:
         return self._rpc({"cmd": "reset", "seed": seed})
 
     def step(self, action: np.ndarray, *, need_obs: bool, sim_state: bool) -> tuple:
@@ -230,7 +230,7 @@ class RoboTwinEnv(RemoteEnv):
                 print(f"  [reset] seed {seed}: {m[1]} more rejected, continuing at {start}")
         raise RuntimeError(f"RoboTwin seed search from {seed} rejected every seed up to {start}")
 
-    def reset(self, seed: int) -> dict:
+    def reset(self, seed: int, episode: int = 0) -> dict:
         entry = self.cache.get(seed) if self.cache else None
         if entry is None:
             reply = self.search(seed)
