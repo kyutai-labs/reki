@@ -53,7 +53,7 @@ class Env(Protocol):
 
     max_episode_steps: int
 
-    def reset(self, seed: int) -> dict: ...
+    def reset(self, seed: int, episode: int) -> dict: ...
     def step(self, action: np.ndarray, *, need_obs: bool, sim_state: bool) -> tuple: ...
     def observe(self, raw: dict) -> EnvObs: ...
     def frame(self, raw: dict) -> np.ndarray: ...
@@ -365,7 +365,7 @@ class _Rollout:
         a, adapter, policy = self.a, self.adapter, self.policy
         true_dim = stats_dim(action_stats)
         torch.manual_seed(seed)
-        raw = env.reset(seed)
+        raw = env.reset(seed, episode=ep)
         policy.reset_episode()
         traj = RolloutTraj(env.traj_start(raw)) if a.save_traj else None
         obs = env.observe(raw)

@@ -167,7 +167,8 @@ class LiberoEnv:
         self.recenter_roll = recenter_roll
         self.scene: Any = None
 
-    def reset(self, seed: int) -> dict:
+    def reset(self, seed: int, episode: int) -> dict:
+        self.env.init_state_id = episode
         raw, _ = self.env.reset(seed=seed)
         return raw
 

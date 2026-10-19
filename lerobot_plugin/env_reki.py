@@ -275,7 +275,7 @@ class RekiSimEnv(gym.Env):
         if self._autoreset:
             self._autoreset = False
             return self._obs, {}
-        unit, _ = next(self._episodes, (None, None))
+        unit, ep = next(self._episodes, (None, None))
         if unit is None:
             raise RuntimeError("every episode of the grid ran: lower --eval.n_episodes")
         if unit is not self._unit:
@@ -289,7 +289,7 @@ class RekiSimEnv(gym.Env):
             print(f"[reki env] {unit.key} (cap={self._max_episode_steps})")
         ep_seed = int(self._rng.integers(0, 2**31 - 1))
         torch.manual_seed(ep_seed)
-        self._obs = self._observe(self._env.reset(ep_seed))
+        self._obs = self._observe(self._env.reset(ep_seed, episode=ep))
         return self._obs, {"seed": ep_seed}
 
     def step(self, action: np.ndarray) -> tuple[dict, float, bool, bool, dict]:
