@@ -679,15 +679,16 @@ def test_sim_env_matches_rollout(
 
 
 class _FakeLiberoEnv:
-    """LeRobot's ``LiberoEnv`` for one task: each reset takes the next init state, also the reset
-    it runs itself after a terminal step. Init states i with i % 3 != 2 succeed at step 13."""
+    """LeRobot's ``LiberoEnv`` for one task: each reset takes init state ``init_state_id`` and
+    advances it, also the reset it runs itself after a terminal step. Init states i with
+    i % 3 != 2 succeed at step 13."""
 
     def __init__(self, log: list, task: str, task_id: int) -> None:
         self.log = log
         self.task_description = f"{task} task {task_id}"
         self._max_episode_steps = 25
-        self.next_init = 10 * task_id
-        self.init = self.step_i = 0
+        self.task_id = task_id
+        self.init_state_id = self.init = self.step_i = 0
 
     def _raw(self) -> dict[str, Any]:
         rng = np.random.default_rng([self.init, self.step_i])
@@ -703,8 +704,8 @@ class _FakeLiberoEnv:
         }
 
     def reset(self, seed: int | None = None) -> tuple[dict, dict]:
-        self.init, self.step_i = self.next_init, 0
-        self.next_init += 1
+        self.init, self.step_i = 10 * self.task_id + self.init_state_id, 0
+        self.init_state_id += 1
         self.log.append(("reset", seed, self.init))
         return self._raw(), {}
 
@@ -752,6 +753,8 @@ def test_libero_env_matches_rollout(
 
     # the env's own reset after a success takes an init state, in both loops
     assert any(e[0] == "reset" and e[1] is None for e in log)
+    # episode i runs init state i
+    assert [e[2] for e in log if e[0] == "reset" and e[1] is not None] == [0, 1, 10, 11] * 2
     assert log == ref_log
     assert successes == _rollout_successes(adapter, tmp_path / "out")
     assert 0 < sum(successes) < len(successes)
