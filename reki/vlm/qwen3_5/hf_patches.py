@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextlib
 import importlib
 import inspect
+import logging
 import types
 from collections.abc import Iterator
 from typing import Any
@@ -190,6 +191,11 @@ def _text_varlen_attention(
 
 
 AttentionInterface.register(TEXT_VARLEN_ATTENTION, _text_varlen_attention)
+
+# HF warns that causal-conv1d is missing; the packed GDN forward runs FLA's kernels instead.
+logging.getLogger(Qwen3_5GatedDeltaNet.__module__).addFilter(
+    lambda record: "fast path is not available" not in record.getMessage()
+)
 
 
 def install_vision_varlen(vlm: nn.Module) -> None:
