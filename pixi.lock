@@ -4034,7 +4034,6 @@ packages:
   name: reki-vla
   requires_dist:
   - torchcodec==0.10.0
-  - lerobot[async]==0.5.1
   - torch==2.10.0
   - torchvision==0.25.0
   - accelerate
@@ -4051,7 +4050,6 @@ packages:
   - imageio
   - safetensors
   - pyyaml
-  - pandas
   - grpcio
   requires_python: '>=3.12,<3.13'
 - pypi: git+https://github.com/kyutai-labs/launcheon?tag=v1.0#1ab0bfa7de2e402480fb3799b1b78169eadbca2e

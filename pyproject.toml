@@ -6,14 +6,22 @@ build-backend = "setuptools.build_meta"
 name = "reki-vla"
 version = "0.1.0"
 description = "REKI: a vision-language-action model with register tokens in the action expert"
-readme = "README.md"
-license = "MIT"
+readme = "PYPI.md"
+license = "MIT AND Apache-2.0"
 authors = [{ name = "Kyutai" }]
 requires-python = ">=3.12,<3.13"
+keywords = ["robotics", "vision-language-action", "vla", "flow-matching", "lerobot"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: POSIX :: Linux",
+    "Environment :: GPU :: NVIDIA CUDA :: 12",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 
 dependencies = [
     "torchcodec==0.10.0",
-    "lerobot[async]==0.5.1",
     "torch==2.10.0",
     "torchvision==0.25.0",
     "accelerate",
@@ -30,7 +38,6 @@ dependencies = [
     "imageio",
     "safetensors",
     "pyyaml",
-    "pandas",
     "grpcio",
 ]
 
@@ -77,6 +84,9 @@ platforms = ["linux-64"]
 [tool.pixi.pypi-dependencies]
 reki-vla = { path = ".", editable = true }
 lerobot_policy_reki = { path = "lerobot_plugin", editable = true }
+# Training, eval and deployment code (reki/data, reki/eval, scripts/) patch LeRobot internals:
+# the repository pins the tested release. Inference (`pip install reki-vla`) needs no LeRobot.
+lerobot = { version = "==0.5.1", extras = ["async"] }
 
 [tool.pixi.activation.env]
 # Per-env lib dir via $CONDA_PREFIX so each env's lib/ (e.g. the sim env's
@@ -87,9 +97,6 @@ LD_LIBRARY_PATH = "$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
 # default to <repo>/storage/ when unset.
 [tool.pixi.activation]
 scripts = ["scripts/load_env.sh"]
-
-[tool.pixi.feature.nvidia.pypi-dependencies]
-triton = "==3.6.0"
 
 [tool.pixi.dependencies]
 ffmpeg = ">=7,<8"
@@ -164,6 +171,6 @@ pyright = "==1.1.398"
 pytest = "*"
 
 [tool.pixi.environments]
-default = ["nvidia", "launch", "dev"]
-sim = ["sim", "nvidia"]
-sim-plus = ["sim-plus", "nvidia"]
+default = ["launch", "dev"]
+sim = ["sim"]
+sim-plus = ["sim-plus"]

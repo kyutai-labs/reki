@@ -104,7 +104,17 @@ together.
 
 ## Installation
 
-Requires Linux x86-64, an NVIDIA GPU with CUDA 12 and [pixi](https://pixi.sh). The pixi environment provides Python 3.12.
+To run the released models ([Quickstart](#quickstart)), install the package from PyPI:
+
+```bash
+pip install reki-vla    # or: uv add reki-vla
+```
+
+It requires Linux x86-64, Python 3.12, an NVIDIA GPU of the Ampere generation or newer with
+driver 570 or newer, a C compiler and the Python 3.12 headers.
+
+Training, evaluation and deployment run from the repository, with [pixi](https://pixi.sh). The
+pixi environment provides Python 3.12:
 
 ```bash
 git clone https://github.com/kyutai-labs/reki.git

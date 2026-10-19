@@ -608,13 +608,6 @@ class Qwen3_5VLMWithExpert(Qwen3_5ExpertInference, nn.Module):
         mrope_positions = torch.stack([frame, slot, slot], dim=0).unsqueeze(1)
         return self.text_backbone.rotary_emb(reference_hidden, mrope_positions)  # type: ignore[attr-defined]
 
-    def _seq_idx(self, seq_lens: torch.Tensor, total_L: int) -> torch.Tensor:
-        """[1, total_L] int32 sample index of each packed row."""
-        return torch.repeat_interleave(
-            torch.arange(seq_lens.shape[0], device=seq_lens.device, dtype=torch.int32),
-            seq_lens.to(torch.int32),
-        ).view(1, total_L)
-
     def register_memory_attention(
         self,
         e_attn: Any,
@@ -704,9 +697,10 @@ class Qwen3_5VLMWithExpert(Qwen3_5ExpertInference, nn.Module):
         fw = self.fwd
         device = vlm_out.device
         vlm_flat = vlm_out.reshape(-1, vlm_out.shape[-1])
-        total_L = vlm_flat.shape[0]
         if fw.cross_attn is None:
-            sample_idx = self._seq_idx(seq_lens.to(torch.int32), total_L).view(-1).long()
+            sample_idx = torch.repeat_interleave(
+                torch.arange(seq_lens.shape[0], device=seq_lens.device), seq_lens
+            )
             own = sample_idx.unsqueeze(0) == robot_indices.to(device).unsqueeze(1)
             src_counts = own.sum(dim=1).to(torch.int32)
             assert int(src_counts.min().item()) > 0, "a virtual sample has an empty CA source"

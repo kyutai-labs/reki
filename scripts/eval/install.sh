@@ -75,6 +75,9 @@ install_libero_plus() {
     log "LIBERO-plus @ $LIBERO_PLUS_COMMIT"
     git clone -q https://github.com/sylvestf/LIBERO-plus.git "$repo"
     git -C "$repo" checkout -q "$LIBERO_PLUS_COMMIT"
+    # NumPy 2 removed np.float_ (used by the fog sensor noise); np.float64 is the same type.
+    sed -i 's/dtype=np\.float_)/dtype=np.float64)/' "$bench/envs/env_wrapper.py"
+    grep -q 'dtype=np.float64)' "$bench/envs/env_wrapper.py" || die "the np.float_ patch did not apply"
     # LIBERO-Plus reads its assets from libero/libero/assets in the clone.
     log "assets: Sylvest/LIBERO-plus assets.zip (not versioned upstream)"
     pixi_run hf download Sylvest/LIBERO-plus assets.zip --repo-type dataset --local-dir "$DIR/download"
