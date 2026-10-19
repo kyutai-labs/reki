@@ -7,8 +7,8 @@ reaches it as
   full_attention   — flash-attention varlen kwargs (``cu_seq_lens_q/k``, ``max_length_q/k``),
                      passed through HF's ``FlashAttentionKwargs``
   linear_attention — ``_PackedQwen3_5DecoderLayer`` (``hf_patches``), which passes
-                     ``gdn_cu_seqlens`` and ``gdn_seq_idx`` to the FLA
-                     ``chunk_gated_delta_rule`` and ``causal_conv1d_fn`` kernels
+                     ``gdn_cu_seqlens`` to the FLA ``causal_conv1d`` and
+                     ``chunk_gated_delta_rule`` kernels
 
 The action expert (``Qwen3_5ActionExpert``) runs, per block, self-attention over the packed
 expert rows (registers ∥ actions), cross-attention to the final-layer VLM output of the user
@@ -609,7 +609,7 @@ class Qwen3_5VLMWithExpert(Qwen3_5ExpertInference, nn.Module):
         return self.text_backbone.rotary_emb(reference_hidden, mrope_positions)  # type: ignore[attr-defined]
 
     def _seq_idx(self, seq_lens: torch.Tensor, total_L: int) -> torch.Tensor:
-        """[1, total_L] int32 sample index for causal_conv1d_fn."""
+        """[1, total_L] int32 sample index of each packed row."""
         return torch.repeat_interleave(
             torch.arange(seq_lens.shape[0], device=seq_lens.device, dtype=torch.int32),
             seq_lens.to(torch.int32),
@@ -865,7 +865,6 @@ class Qwen3_5VLMWithExpert(Qwen3_5ExpertInference, nn.Module):
             seq_lens = torch.tensor([L_total], device=vlm_hidden.device, dtype=torch.int32)
         cu_vlm = _cu_seqlens(seq_lens.to(torch.int32))
         max_vlm = int(seq_lens.max().item())
-        seq_idx = self._seq_idx(seq_lens.to(torch.int32), L_total)
 
         expert_starts_all = fw.expert_starts
         n_draws = fw.flow_draws
@@ -905,7 +904,6 @@ class Qwen3_5VLMWithExpert(Qwen3_5ExpertInference, nn.Module):
                 max_length_q=max_vlm,
                 max_length_k=max_vlm,
                 gdn_cu_seqlens=cu_vlm.to(torch.long),
-                gdn_seq_idx=seq_idx,
             )
         vlm_out = out.last_hidden_state
 

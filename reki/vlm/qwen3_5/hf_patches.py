@@ -20,7 +20,7 @@ from typing import Any
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from causal_conv1d import causal_conv1d_fn
+from fla.modules.conv import causal_conv1d
 from fla.ops.gated_delta_rule import chunk_gated_delta_rule
 from flash_attn import flash_attn_varlen_func
 from transformers.models.qwen3_5.modeling_qwen3_5 import (
@@ -248,28 +248,28 @@ def _packed_gdn_forward(
     attn: Qwen3_5GatedDeltaNet,
     hidden_states: torch.Tensor,
     cu_seqlens: torch.Tensor,
-    seq_idx: torch.Tensor,
     cu_seqlens_cpu: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """HF's ``Qwen3_5GatedDeltaNet.forward`` (no-cache branch) with packing added. ``seq_idx``
-    segments the causal conv and ``cu_seqlens`` (int64) segments the chunked delta rule, so
-    token mixing never crosses a sample boundary. The FLA and causal-conv1d kernels are HF's.
-    ``cu_seqlens_cpu`` is an optional host copy. With it, FLA indexes the chunks without a host
-    sync, which CUDA-graph capture requires.
+    """HF's ``Qwen3_5GatedDeltaNet.forward`` (no-cache branch) with packing added.
+    ``cu_seqlens`` (int64) segments the causal conv and the chunked delta rule, so token mixing
+    never crosses a sample boundary. Both kernels are FLA's (Triton). ``cu_seqlens_cpu`` is an
+    optional host copy. With it, FLA indexes the chunks without a host sync, which CUDA-graph
+    capture requires.
     """
     batch_size, seq_len, _ = hidden_states.shape
-    mixed_qkv = attn.in_proj_qkv(hidden_states).transpose(1, 2)
+    mixed_qkv = attn.in_proj_qkv(hidden_states)
     z = attn.in_proj_z(hidden_states).reshape(batch_size, seq_len, -1, attn.head_v_dim)
     b = attn.in_proj_b(hidden_states)
     a = attn.in_proj_a(hidden_states)
 
-    mixed_qkv = causal_conv1d_fn(
+    mixed_qkv, _ = causal_conv1d(
         x=mixed_qkv,
         weight=attn.conv1d.weight.squeeze(1),
         bias=attn.conv1d.bias,
         activation=attn.activation,
-        seq_idx=seq_idx,
-    ).transpose(1, 2)
+        cu_seqlens=cu_seqlens,
+        cu_seqlens_cpu=cu_seqlens_cpu,
+    )
 
     query, key, value = torch.split(mixed_qkv, [attn.key_dim, attn.key_dim, attn.value_dim], dim=-1)
     query = query.reshape(batch_size, seq_len, -1, attn.head_k_dim)
@@ -307,7 +307,7 @@ class _PackedQwen3_5DecoderLayer(Qwen3_5DecoderLayer):
     """HF decoder layer whose ``linear_attn`` also receives the packing kwargs.
 
     HF's layer passes ``**kwargs`` (including the flash-attention varlen kwargs) only to
-    ``self_attn``; this subclass also passes ``gdn_cu_seqlens``/``gdn_seq_idx`` to the gated
+    ``self_attn``; this subclass also passes ``gdn_cu_seqlens`` to the gated
     delta net. Installed by a ``__class__`` swap, so the weights are untouched.
     """
 
@@ -320,7 +320,6 @@ class _PackedQwen3_5DecoderLayer(Qwen3_5DecoderLayer):
         past_key_values: Any = None,
         cache_position: torch.LongTensor | None = None,
         gdn_cu_seqlens: torch.Tensor | None = None,
-        gdn_seq_idx: torch.Tensor | None = None,
         gdn_cu_seqlens_cpu: torch.Tensor | None = None,
         **kwargs: Any,
     ) -> torch.Tensor:
@@ -328,13 +327,11 @@ class _PackedQwen3_5DecoderLayer(Qwen3_5DecoderLayer):
         hidden_states = self.input_layernorm(hidden_states)
 
         if self.layer_type == "linear_attention":
-            if gdn_cu_seqlens is None or gdn_seq_idx is None:
-                raise ValueError(
-                    "packed GDN layer requires gdn_cu_seqlens/gdn_seq_idx (packed BS=1)"
-                )
+            if gdn_cu_seqlens is None:
+                raise ValueError("packed GDN layer requires gdn_cu_seqlens (packed BS=1)")
             assert past_key_values is None, "packed GDN forward is cache-free"
             hidden_states = _packed_gdn_forward(
-                self.linear_attn, hidden_states, gdn_cu_seqlens, gdn_seq_idx, gdn_cu_seqlens_cpu
+                self.linear_attn, hidden_states, gdn_cu_seqlens, gdn_cu_seqlens_cpu
             )
         else:
             hidden_states, _ = self.self_attn(

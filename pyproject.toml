@@ -18,7 +18,7 @@ dependencies = [
     "torchvision",
     "accelerate",
     "fire",
-    # flash-attn and causal-conv1d ship no PyPI wheels: prebuilt wheels in the `nvidia` feature.
+    # flash-attn ships no PyPI wheel: the prebuilt wheel is in the `nvidia` feature.
     "flash-linear-attention==0.4.2",
     "scipy",
     "transformers==5.3.0",
@@ -89,11 +89,10 @@ LD_LIBRARY_PATH = "$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
 [tool.pixi.activation]
 scripts = ["scripts/load_env.sh"]
 
-# nvidia feature: flash-attn and causal-conv1d as prebuilt cu12/torch2.7 wheels (no source build).
+# nvidia feature: flash-attn as a prebuilt cu12/torch2.7 wheel (no source build).
 [tool.pixi.feature.nvidia.pypi-dependencies]
 triton = "==3.3.0"
 flash-attn = { url = "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.7cxx11abiTRUE-cp312-cp312-linux_x86_64.whl" }
-causal-conv1d = { url = "https://github.com/Dao-AILab/causal-conv1d/releases/download/v1.5.4/causal_conv1d-1.5.4+cu12torch2.7cxx11abiTRUE-cp312-cp312-linux_x86_64.whl" }
 
 [tool.pixi.dependencies]
 ffmpeg = ">=7,<8"
