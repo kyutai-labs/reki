@@ -1,5 +1,5 @@
 """Expert register-memory self-attention matches a dense fp32 masked softmax in the output AND
-in dq/dk/dv (flash-attn's backward drops the LSE gradient, so a two-call LSE merge is exact
+in dq/dk/dv (the flash kernel's backward drops the LSE gradient, so a two-call LSE merge is exact
 only in the forward)."""
 
 from __future__ import annotations

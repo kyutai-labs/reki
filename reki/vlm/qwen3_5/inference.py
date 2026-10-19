@@ -13,13 +13,12 @@ from typing import TYPE_CHECKING, Any
 
 import torch
 import torch.nn.functional as F
-from flash_attn import flash_attn_varlen_func
 from transformers.models.qwen3_5.modeling_qwen3_5 import apply_rotary_pos_emb, rotate_half
 
 from ..adarms import gated_residual as _gated_residual
 from ..adarms import modulated_norm
 from ..adarms_base import PiGemmaRMSNorm as AdaRMSNorm
-from ..common import cu_seqlens_from, cu_single
+from ..common import cu_seqlens_from, cu_single, varlen_attention
 
 if TYPE_CHECKING:
     import torch.nn as nn
@@ -86,16 +85,14 @@ def _cached_cross_attn(
     ``k_ca``/``v_ca`` past ``S`` are never read (``gather_cross_attn_source``)."""
     q_ca = c_attn.q_norm(c_attn.q_proj(q_ca_hidden).view(n_rows, c_attn.n_q_heads, head_dim))
     q_ca = _rope1(q_ca, cos_ca, sin_ca)
-    y_ca = flash_attn_varlen_func(
+    y_ca = varlen_attention(
         q_ca,
         k_ca,
         v_ca,
-        cu_seqlens_q=cu_q,
-        cu_seqlens_k=cu_k,
-        max_seqlen_q=n_rows,
-        max_seqlen_k=k_ca.shape[0],
-        softmax_scale=head_dim**-0.5,
-        causal=False,
+        cu_q,
+        cu_k,
+        n_rows,
+        k_ca.shape[0],
     ).view(n_rows, -1)
     return c_attn.o_proj(y_ca)
 
@@ -335,16 +332,14 @@ class Qwen3_5ExpertInference:
             mem_kv.append((mem_k, mem_v))
             # One varlen call: register queries attend the memory, action queries attend
             # memory ∥ own actions (an empty query segment in between skips stale rows).
-            y_sa = flash_attn_varlen_func(
+            y_sa = varlen_attention(
                 q,
                 torch.cat([mem_k, mem_k, k_rot[R:]], dim=0),
                 torch.cat([mem_v, mem_v, v[R:]], dim=0),
-                cu_seqlens_q=cu_q,
-                cu_seqlens_k=cu_kv,
-                max_seqlen_q=max(R, n_act),
-                max_seqlen_k=n_mem + n_act,
-                softmax_scale=D**-0.5,
-                causal=False,
+                cu_q,
+                cu_kv,
+                max(R, n_act),
+                n_mem + n_act,
             ).view(n_rows, -1)
             h = _gated_residual(hidden, e_attn.o_proj(y_sa), e_gate)
 
@@ -398,16 +393,14 @@ class Qwen3_5ExpertInference:
             # One softmax over the union of keys, as in training.
             mem_k, mem_v = step["mem_kv"][layer_idx]
             y_sa = (
-                flash_attn_varlen_func(
+                varlen_attention(
                     qa,
                     torch.cat([mem_k, ka], dim=0),
                     torch.cat([mem_v, va], dim=0),
-                    cu_seqlens_q=cu_a,
-                    cu_seqlens_k=cu_kv,
-                    max_seqlen_q=cs,
-                    max_seqlen_k=mem_k.shape[0] + cs,
-                    softmax_scale=D**-0.5,
-                    causal=False,
+                    cu_a,
+                    cu_kv,
+                    cs,
+                    mem_k.shape[0] + cs,
                 )
                 .to(action_hidden.dtype)
                 .view(cs, -1)

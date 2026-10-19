@@ -18,7 +18,7 @@ architecture](../../../docs/architecture.md).
 | `image_processor.py` | Tensor-native Qwen3.5 image processing (single-frame patches via `from_processor`). |
 
 `action_expert.py`, `cuda_graph.py`, `preprocessor.py` and `image_processor.py` import on a CPU-only
-host; the other modules import the CUDA kernels (flash-attn and FLA).
+host; the other modules import the CUDA kernels (torch varlen attention and FLA).
 
 ## Training
 
@@ -37,7 +37,7 @@ and `ExpertGraphs` replays one predict as one CUDA graph.
 
 ## Pinned versions
 
-`pyproject.toml` pins the versions of Transformers, FLA, torch, triton and flash-attn.
+`pyproject.toml` pins the versions of Transformers, FLA, torch and triton.
 `hf_patches` re-implements HF forwards and checks the patched HF layout:
 `install_vision_varlen` and `install_packed_decoder_layers` raise on a mismatch, so a Transformers
 upgrade requires these patches to be checked again. `fla_inference_configs` pins FLA kernel configurations by name.

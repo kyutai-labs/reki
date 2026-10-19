@@ -3,10 +3,30 @@
 from __future__ import annotations
 
 import torch
+from torch.nn.attention.varlen import varlen_attn
+
+
+def varlen_attention(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    cu_q: torch.Tensor,
+    cu_k: torch.Tensor,
+    max_q: int,
+    max_k: int,
+    is_causal: bool = False,
+) -> torch.Tensor:
+    """torch's varlen flash attention over packed ``[T, H, D]`` rows, scale ``D**-0.5``. ``k``
+    and ``v`` may have fewer heads than ``q`` (GQA): the FA2 kernel maps query head ``h`` to KV
+    head ``h // (H / H_kv)``, as HF's ``repeat_kv``. ``varlen_attn`` does not document it;
+    ``tests/model/test_varlen_gqa.py`` pins it."""
+    out = varlen_attn(q, k, v, cu_q, cu_k, max_q, max_k, is_causal=is_causal)
+    assert isinstance(out, torch.Tensor)
+    return out
 
 
 def cu_seqlens(counts: torch.Tensor) -> torch.Tensor:
-    """Cumulative sequence lengths for flash_attn_varlen / FLA kernels."""
+    """Cumulative sequence lengths for the varlen attention / FLA kernels."""
     return torch.cat(
         [torch.zeros(1, device=counts.device, dtype=torch.int32), counts.cumsum(0)]
     ).to(torch.int32)

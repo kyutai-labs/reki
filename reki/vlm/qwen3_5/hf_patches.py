@@ -4,9 +4,9 @@
 # HuggingFace Inc. team. Licensed under the Apache License, Version 2.0
 # (http://www.apache.org/licenses/LICENSE-2.0). See NOTICE.
 """Patches to the HF Qwen3.5 model and the FLA kernels, applied by ``Qwen3_5VLMWithExpert``:
-a ``Linear`` vision patch embed, one flash-attention varlen call per vision layer, decoder
-layers that pass the packing kwargs to the gated delta net, and the fixed FLA kernel configs of
-the inference prefill (``fla_inference_configs``)."""
+a ``Linear`` vision patch embed, one varlen attention call per vision layer, the packed text
+attention (``TEXT_VARLEN_ATTENTION``), decoder layers that pass the packing kwargs to the gated
+delta net, and the fixed FLA kernel configs of the inference prefill (``fla_inference_configs``)."""
 
 from __future__ import annotations
 
@@ -22,12 +22,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 from fla.modules.conv import causal_conv1d
 from fla.ops.gated_delta_rule import chunk_gated_delta_rule
-from flash_attn import flash_attn_varlen_func
+from transformers import AttentionInterface
 from transformers.models.qwen3_5.modeling_qwen3_5 import (
     Qwen3_5DecoderLayer,
     Qwen3_5GatedDeltaNet,
     apply_rotary_pos_emb_vision,
 )
+
+from ..common import varlen_attention
 
 # FLA kernels of the GDN prefill whose config changes the output bits:
 # (module, kernel) -> (meta-parameters, num_warps, num_stages).
@@ -155,11 +157,45 @@ def linearize_vision_patch_embed(vlm: Any) -> None:
     visual.patch_embed = LinearPatchEmbed.from_conv3d(pe)
 
 
+# Name of the packed text attention in HF's AttentionInterface (``attn_implementation``).
+TEXT_VARLEN_ATTENTION = "reki_varlen"
+
+
+def _text_varlen_attention(
+    module: nn.Module,
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    attention_mask: torch.Tensor | None,
+    scaling: float | None = None,
+    **kwargs: Any,
+) -> tuple[torch.Tensor, None]:
+    """Causal attention of the packed text backbone on torch's varlen flash kernel. ``query``
+    [1, H, L, D] and ``key``/``value`` [1, H_kv, L, D] in HF's layout; the sample boundaries
+    come from the ``cu_seq_lens_q/k`` and ``max_length_q/k`` kwargs. Returns [1, L, H, D].
+    HF builds no mask for a name outside its mask interface, so ``attention_mask`` is None."""
+    assert attention_mask is None and scaling == query.shape[-1] ** -0.5
+    assert kwargs.get("dropout", 0.0) == 0.0
+    out = varlen_attention(
+        query[0].transpose(0, 1),
+        key[0].transpose(0, 1),
+        value[0].transpose(0, 1),
+        kwargs["cu_seq_lens_q"],
+        kwargs["cu_seq_lens_k"],
+        kwargs["max_length_q"],
+        kwargs["max_length_k"],
+        is_causal=True,
+    )
+    return out.unsqueeze(0), None
+
+
+AttentionInterface.register(TEXT_VARLEN_ATTENTION, _text_varlen_attention)
+
+
 def install_vision_varlen(vlm: nn.Module) -> None:
     """Patch the HF vision tower to launch fewer kernels and host ops. The math is the same.
 
-    - Attention: one ``flash_attn_varlen_func`` call per layer replaces HF's per-image SDPA
-      loop. HF's FA2 path crashes on the host ``cu_seqlens`` that the packed path passes.
+    - Attention: one ``varlen_attn`` call per layer replaces HF's per-image SDPA loop.
       The device copy of ``cu_seqlens`` is made once per tower call.
     - Position tables: HF's ``rot_pos_emb`` / ``fast_pos_embed_interpolate`` are per-image
       Python loops. The patch computes them once per distinct grid and tiles the result. The
@@ -213,16 +249,14 @@ def install_vision_varlen(vlm: nn.Module) -> None:
             if dev.device.type == "cpu":
                 dev = dev.pin_memory().to(q.device, non_blocking=True)
             cu_cache.update(host=cu_seqlens, dev=dev, max=int(lens.max()))
-        out = flash_attn_varlen_func(
+        out = varlen_attention(
             q.contiguous(),
             k.contiguous(),
             v.contiguous(),
-            cu_seqlens_q=cu_cache["dev"],
-            cu_seqlens_k=cu_cache["dev"],
-            max_seqlen_q=cu_cache["max"],
-            max_seqlen_k=cu_cache["max"],
-            softmax_scale=self.scaling,
-            causal=False,
+            cu_cache["dev"],
+            cu_cache["dev"],
+            cu_cache["max"],
+            cu_cache["max"],
         )
         return self.proj(out.reshape(S, -1))
 
@@ -306,7 +340,7 @@ def _packed_gdn_forward(
 class _PackedQwen3_5DecoderLayer(Qwen3_5DecoderLayer):
     """HF decoder layer whose ``linear_attn`` also receives the packing kwargs.
 
-    HF's layer passes ``**kwargs`` (including the flash-attention varlen kwargs) only to
+    HF's layer passes ``**kwargs`` (including the varlen attention kwargs) only to
     ``self_attn``; this subclass also passes ``gdn_cu_seqlens`` to the gated
     delta net. Installed by a ``__class__`` swap, so the weights are untouched.
     """

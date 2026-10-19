@@ -137,9 +137,8 @@ cp .env.example .env   # then edit .env
 <details>
 <summary>Version pins</summary>
 
-`pixi.lock` pins all versions. The [Results](#results) use `torch==2.7.0`,
-`transformers==5.3.0`, `flash-linear-attention==0.4.2`, `flash-attn` 2.8.3 and `lerobot` rev
-`aa9cc9b`.
+`pixi.lock` pins all versions, among them `torch==2.10.0`, `transformers==5.3.0`,
+`flash-linear-attention==0.4.2` and `lerobot==0.5.1`.
 
 </details>
 

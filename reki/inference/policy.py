@@ -84,7 +84,7 @@ class RekiPolicy:
             path_or_hf_id: a local directory or a Hugging Face repo id. An exported checkpoint
                 (``scripts/export_checkpoint.py``, all Hub checkpoints) has its inference spec;
                 a raw training checkpoint needs ``dataset``.
-            device: a CUDA device. The model needs flash-attn and FLA kernels; CPU is not
+            device: a CUDA device. The model needs CUDA attention and FLA kernels; CPU is not
                 supported.
             dataset: only for a raw training checkpoint: the registered dataset it was
                 finetuned on. The spec and stats are then built from that dataset's ``meta/``

@@ -32,7 +32,7 @@ def _text_vision_inputs(ids_2d: torch.Tensor) -> dict[str, torch.Tensor]:
 
 def test_packed_forward_matches_per_segment() -> None:
     """The full packed text forward (2 samples, one stream) reproduces each sample
-    forwarded alone — FA varlen kwargs + GDN shim + per-sample MRoPE compose."""
+    forwarded alone — varlen kwargs + GDN shim + per-sample MRoPE compose."""
     torch.manual_seed(0)
     device = "cuda"
     ours = _load_ours(device)

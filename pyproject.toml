@@ -12,13 +12,12 @@ authors = [{ name = "Kyutai" }]
 requires-python = ">=3.12,<3.13"
 
 dependencies = [
-    "torchcodec==0.4.0",
+    "torchcodec==0.10.0",
     "lerobot[async]==0.5.1",
-    "torch==2.7.0",
-    "torchvision",
+    "torch==2.10.0",
+    "torchvision==0.25.0",
     "accelerate",
     "fire",
-    # flash-attn ships no PyPI wheel: the prebuilt wheel is in the `nvidia` feature.
     "flash-linear-attention==0.4.2",
     "scipy",
     "transformers==5.3.0",
@@ -89,10 +88,8 @@ LD_LIBRARY_PATH = "$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
 [tool.pixi.activation]
 scripts = ["scripts/load_env.sh"]
 
-# nvidia feature: flash-attn as a prebuilt cu12/torch2.7 wheel (no source build).
 [tool.pixi.feature.nvidia.pypi-dependencies]
-triton = "==3.3.0"
-flash-attn = { url = "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.7cxx11abiTRUE-cp312-cp312-linux_x86_64.whl" }
+triton = "==3.6.0"
 
 [tool.pixi.dependencies]
 ffmpeg = ">=7,<8"
@@ -143,7 +140,7 @@ wand = "*"
 mujoco = "==3.3.2"
 PyOpenGL = "*"
 PyOpenGL-accelerate = "*"
-# torch comes from the nvidia feature; transformers is shared in [project].dependencies.
+# torch and transformers come from [project].dependencies.
 
 [tool.pixi.tasks]
 # Uses every visible GPU (multi-GPU when more than one); bf16 is set in train.py.

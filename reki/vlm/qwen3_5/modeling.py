@@ -4,8 +4,8 @@ Samples are packed into one row ([1, total_L, D], batch size 1) with ``cu_seqlen
 the sample boundaries. The VLM pass is the stock HF ``Qwen3_5TextModel`` forward; packing
 reaches it as
 
-  full_attention   — flash-attention varlen kwargs (``cu_seq_lens_q/k``, ``max_length_q/k``),
-                     passed through HF's ``FlashAttentionKwargs``
+  full_attention   — varlen kwargs (``cu_seq_lens_q/k``, ``max_length_q/k``) passed through
+                     HF's ``FlashAttentionKwargs`` to ``TEXT_VARLEN_ATTENTION`` (``hf_patches``)
   linear_attention — ``_PackedQwen3_5DecoderLayer`` (``hf_patches``), which passes
                      ``gdn_cu_seqlens`` to the FLA ``causal_conv1d`` and
                      ``chunk_gated_delta_rule`` kernels
@@ -28,7 +28,6 @@ from typing import cast as type_cast
 import torch
 import torch.nn as nn
 import torch.utils.checkpoint
-from flash_attn import flash_attn_varlen_func
 from transformers import AutoConfig, AutoModelForImageTextToText, PreTrainedModel
 from transformers.initialization import no_init_weights
 from transformers.models.qwen3_5.modeling_qwen3_5 import apply_rotary_pos_emb
@@ -37,9 +36,10 @@ from ..adarms import RegisterAdaRMSNorm
 from ..adarms import gated_residual as _gated_residual
 from ..adarms_base import PiGemmaRMSNorm as AdaRMSNorm
 from ..common import cu_seqlens as _cu_seqlens
-from ..common import register_shared_row_offsets
+from ..common import register_shared_row_offsets, varlen_attention
 from .action_expert import Qwen3_5ActionExpert
 from .hf_patches import (
+    TEXT_VARLEN_ATTENTION,
     fla_inference_configs,
     install_packed_decoder_layers,
     install_vision_varlen,
@@ -136,11 +136,11 @@ class Qwen3_5VLMWithExpert(Qwen3_5ExpertInference, nn.Module):
 
         self.vlm = vlm
         attn_impl = vlm.config.text_config._attn_implementation
-        if attn_impl != "flash_attention_2":
+        if attn_impl != TEXT_VARLEN_ATTENTION:
             raise ValueError(
                 "Qwen3_5VLMWithExpert requires the text backbone loaded with "
-                f"attn_implementation='flash_attention_2' (got {attn_impl!r}); "
-                "packed BS=1 relies on the FA varlen kwargs."
+                f"attn_implementation={TEXT_VARLEN_ATTENTION!r} (got {attn_impl!r}); "
+                "packed BS=1 relies on the varlen kwargs."
             )
         install_packed_decoder_layers(self.text_backbone)
         self.action_expert = action_expert
@@ -192,9 +192,9 @@ class Qwen3_5VLMWithExpert(Qwen3_5ExpertInference, nn.Module):
         """The pretrained VLM ``model_id`` with the folded linear patch embed, varlen vision
         attention and a newly initialized action expert. ``load_vlm_weights=False`` builds the
         VLM from its config only (random weights, for a full checkpoint load after)."""
-        # Text needs FA varlen kwargs for packed BS=1; vision loads as sdpa,
-        # then install_vision_varlen replaces its attention with FA varlen.
-        attn_implementation = {"text_config": "flash_attention_2", "vision_config": "sdpa"}
+        # Text needs the varlen kwargs for packed BS=1; vision loads as sdpa,
+        # then install_vision_varlen replaces its attention with varlen_attn.
+        attn_implementation = {"text_config": TEXT_VARLEN_ATTENTION, "vision_config": "sdpa"}
         if load_vlm_weights:
             vlm = AutoModelForImageTextToText.from_pretrained(
                 model_id, dtype=dtype, attn_implementation=attn_implementation
@@ -676,16 +676,14 @@ class Qwen3_5VLMWithExpert(Qwen3_5ExpertInference, nn.Module):
                 max_kv=int(max_kv),
             )
         idx, cu_q, cu_kv, max_q_seg, max_kv = fw.register_attention
-        y = flash_attn_varlen_func(
+        y = varlen_attention(
             q_e,
             k_e[idx],
             v_e[idx],
-            cu_seqlens_q=cu_q,
-            cu_seqlens_k=cu_kv,
-            max_seqlen_q=max_q_seg,
-            max_seqlen_k=max_kv,
-            softmax_scale=head_dim**-0.5,
-            causal=False,
+            cu_q,
+            cu_kv,
+            max_q_seg,
+            max_kv,
         )
         return e_attn.o_proj(y.reshape(N, -1))
 
@@ -811,16 +809,14 @@ class Qwen3_5VLMWithExpert(Qwen3_5ExpertInference, nn.Module):
                 torch.empty_like(k_ca[:, :1]), k_ca, s_cos, s_sin, unsqueeze_dim=1
             )
             v_ca = c_attn.v_proj(src).view(S, c_attn.n_kv_heads, D)
-            y_ca = flash_attn_varlen_func(
+            y_ca = varlen_attention(
                 q_ca,
                 k_ca,
                 v_ca,
-                cu_seqlens_q=cu_q_ca,
-                cu_seqlens_k=cu_src,
-                max_seqlen_q=max_q_ca,
-                max_seqlen_k=max_src,
-                softmax_scale=D**-0.5,
-                causal=False,
+                cu_q_ca,
+                cu_src,
+                max_q_ca,
+                max_src,
             ).view(N, -1)
             h = _gated_residual(h, c_attn.o_proj(y_ca), ca_gate)
 
@@ -891,9 +887,7 @@ class Qwen3_5VLMWithExpert(Qwen3_5ExpertInference, nn.Module):
                 fw.expert_frame_pos, cs_per_sample, vlm_hidden, row_offsets=row_off
             )
 
-        # Always pass cu_seq_lens_q/k explicitly: without them HF's flash-attention path hits a
-        # CUDA illegal memory access (transformers 5.3; MRoPE position_ids break its packing
-        # detection).
+        # TEXT_VARLEN_ATTENTION reads the sample boundaries from cu_seq_lens_q/k and max_length_q/k.
         with fla_inference_configs() if prefill_only else contextlib.nullcontext():
             out = text_model(
                 inputs_embeds=vlm_hidden,
