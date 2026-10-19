@@ -3,7 +3,7 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "reki"
+name = "reki-vla"
 version = "0.1.0"
 description = "REKI: a vision-language-action model with register tokens in the action expert"
 readme = "README.md"
@@ -13,10 +13,12 @@ requires-python = ">=3.12,<3.13"
 
 dependencies = [
     "torchcodec==0.4.0",
-    "lerobot[async] @ git+https://github.com/huggingface/lerobot.git@aa9cc9bd43e9eba92a32aaadde2a09c90b5836cf",
+    "lerobot[async]==0.5.1",
+    "torch==2.7.0",
+    "torchvision",
     "accelerate",
     "fire",
-    # Compiled CUDA deps (torch, torchvision, flash-attn, causal-conv1d) live in the `nvidia` feature.
+    # flash-attn and causal-conv1d ship no PyPI wheels: prebuilt wheels in the `nvidia` feature.
     "flash-linear-attention==0.4.2",
     "scipy",
     "transformers==5.3.0",
@@ -74,7 +76,7 @@ channels = ["conda-forge"]
 platforms = ["linux-64"]
 
 [tool.pixi.pypi-dependencies]
-reki = { path = ".", editable = true }
+reki-vla = { path = ".", editable = true }
 lerobot_policy_reki = { path = "lerobot_plugin", editable = true }
 
 [tool.pixi.activation.env]
@@ -87,11 +89,8 @@ LD_LIBRARY_PATH = "$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
 [tool.pixi.activation]
 scripts = ["scripts/load_env.sh"]
 
-# nvidia feature: torch/torchvision from PyPI (CUDA build); flash-attn and
-# causal-conv1d as prebuilt cu12/torch2.7 wheels (no source build).
+# nvidia feature: flash-attn and causal-conv1d as prebuilt cu12/torch2.7 wheels (no source build).
 [tool.pixi.feature.nvidia.pypi-dependencies]
-torch = "==2.7.0"
-torchvision = "*"
 triton = "==3.3.0"
 flash-attn = { url = "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.7cxx11abiTRUE-cp312-cp312-linux_x86_64.whl" }
 causal-conv1d = { url = "https://github.com/Dao-AILab/causal-conv1d/releases/download/v1.5.4/causal_conv1d-1.5.4+cu12torch2.7cxx11abiTRUE-cp312-cp312-linux_x86_64.whl" }
