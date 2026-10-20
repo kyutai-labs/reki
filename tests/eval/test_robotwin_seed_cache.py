@@ -325,8 +325,8 @@ def test_server_seed_search_closes_count_toward_the_render_cache_clear(
     for seed in (0, 2, 4):
         assert sim.reset(seed)["seed_used"] == seed + 1
     assert sim.env.setups == [0, 1, 1, 2, 3, 3, 4, 5, 5]
-    # Expert checks of seeds 0, 1 / 2, 3 / 4, 5, and the rollout scenes of seeds 1 and 3 closed
-    # by the next reset: every 2nd of these closes frees the render cache.
+    # Closes in order: checks of seeds 0, 1, rollout scene 1 (closed by the next reset), checks
+    # of 2, 3, rollout scene 3, checks of 4, 5. Every 2nd close frees the render cache.
     assert sim.env.closes == [False, True, False, True, False, True, False, True]
 
 

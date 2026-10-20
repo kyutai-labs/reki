@@ -135,7 +135,7 @@ class RoboTwinSim:
         self.args: dict = {}
         self.instruction = ""
         self.episode_info: Any = None
-        # The scene of the last reset, closed by the next reset or make.
+        # True while the last reset's scene is open; the next reset, make or close closes it.
         self._scene_open = False
         self._n_closed = 0
 
