@@ -20,7 +20,8 @@
 ## News
 
 - **2026-10-20:** `reki-vla` on PyPI (`pip install reki-vla`), with inference support for the
-  released models. Requirements: PyTorch 2.10; `flash-attn` and `causal-conv1d` are no longer needed.
+  released models. We moved from PyTorch 2.7 to 2.10 so that REKI no longer requires compiled
+  CUDA extensions (`flash-attn` and `causal-conv1d`).
 
 ## Model
 
