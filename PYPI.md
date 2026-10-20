@@ -8,9 +8,8 @@
 
 ## Installation
 
-Requires Linux x86-64, Python 3.12 and an NVIDIA GPU of the Ampere generation or newer with
-driver 570 or newer (CUDA 12.8). Triton compiles kernels at run time: the system also needs a C
-compiler (gcc or clang) and the Python 3.12 headers.
+Requires Linux x86-64, Python 3.12, an NVIDIA GPU of the Ampere generation or newer with
+driver 570 or newer (CUDA 12.8), a C compiler and the Python 3.12 headers.
 
 ```bash
 pip install reki-vla    # or: uv add reki-vla

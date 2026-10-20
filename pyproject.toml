@@ -84,8 +84,7 @@ platforms = ["linux-64"]
 [tool.pixi.pypi-dependencies]
 reki-vla = { path = ".", editable = true }
 lerobot_policy_reki = { path = "lerobot_plugin", editable = true }
-# Training, eval and deployment code (reki/data, reki/eval, scripts/) patch LeRobot internals:
-# the repository pins the tested release. Inference (`pip install reki-vla`) needs no LeRobot.
+# Tested LeRobot release for training, eval and deployment; inference needs none.
 lerobot = { version = "==0.5.1", extras = ["async"] }
 
 [tool.pixi.activation.env]

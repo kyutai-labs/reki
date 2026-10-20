@@ -7361,5 +7361,6 @@ packages:
   name: lerobot-policy-reki
   requires_dist:
   - reki-vla
+  - lerobot[async]==0.5.1
   - gymnasium
   requires_python: '>=3.12,<3.13'
