@@ -19,9 +19,9 @@
 
 ## News
 
-- **2026-10-20:** `reki-vla` on PyPI (`pip install reki-vla`), with inference support for the
-  released models. We moved from PyTorch 2.7 to 2.10 so that REKI no longer requires compiled
-  CUDA extensions (`flash-attn` and `causal-conv1d`).
+- **2026-10-20:** We published REKI on PyPI as `reki-vla` (`pip install reki-vla`), with
+  inference support for the released models. We moved from PyTorch 2.7 to 2.10 so that REKI no
+  longer requires compiled CUDA extensions (`flash-attn` and `causal-conv1d`).
 
 ## Model
 
