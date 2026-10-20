@@ -57,7 +57,6 @@ def test_register_sa_output_and_grads_match_dense() -> None:
             q,
             k,
             v,
-            D,
             N,
         )
 

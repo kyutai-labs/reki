@@ -614,7 +614,6 @@ class Qwen3_5VLMWithExpert(Qwen3_5ExpertInference, nn.Module):
         q_e: torch.Tensor,
         k_e: torch.Tensor,
         v_e: torch.Tensor,
-        head_dim: int,
         N: int,
     ) -> torch.Tensor:
         """Expert self-attention under register memory, as one varlen call over per-segment KV.
@@ -786,7 +785,7 @@ class Qwen3_5VLMWithExpert(Qwen3_5ExpertInference, nn.Module):
             q_e, k_e = apply_rotary_pos_emb(
                 q_e, k_e, sa_pe[0].squeeze(0), sa_pe[1].squeeze(0), unsqueeze_dim=1
             )
-            out_sa = self.register_memory_attention(e_attn, q_e, k_e, v_e, D, N)
+            out_sa = self.register_memory_attention(e_attn, q_e, k_e, v_e, N)
             h = _gated_residual(action_hidden, out_sa, e_gate)
 
             ca_norm, ca_gate = e_layer.cross_attn_layernorm(
