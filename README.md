@@ -17,6 +17,11 @@
 
 </div>
 
+## News
+
+- **2026-10-20:** `reki-vla` on PyPI (`pip install reki-vla`), with inference support for the
+  released models. Requirements: PyTorch 2.10; `flash-attn` and `causal-conv1d` are no longer needed.
+
 ## Model
 
 REKI is a vision-language-action (VLA) model. A Qwen3.5-2B VLM encodes the camera views and the
