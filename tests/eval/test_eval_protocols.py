@@ -96,6 +96,15 @@ def test_robotwin_server_configs_and_clean2rand_files(sims: Path) -> None:
         derived = (cfg / f"demo_{axis}.yml").read_text().splitlines()
         changed = {a.split(":")[0] for a, b in zip(clean, derived) if a != b}
         assert changed == set(keys), axis
+    # At demo_clean's clean_background_rate (1) RoboTwin places no clutter.
+    assert "clean_background_rate: 0.02" in (cfg / "demo_clutter.yml").read_text().splitlines()
+
+
+def test_clean2rand_rewrites_a_stale_config(sims: Path) -> None:
+    stale = sims / "sim/robotwin/RoboTwin/task_config/demo_clutter.yml"
+    stale.write_text(CLEAN_YML.replace("cluttered_table: false", "cluttered_table: true"))
+    P.eval_jobs("robotwin_clean2rand", str(sims / "ckpt"), "/out", use_ema=False)
+    assert "clean_background_rate: 0.02" in stale.read_text().splitlines()
 
 
 def test_robotwin_refuses_low_res_cameras(sims: Path) -> None:

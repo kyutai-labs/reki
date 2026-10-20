@@ -40,7 +40,8 @@ ROBOTWIN_TASK_CONFIG = {
 CLEAN2RAND_KEYS = {
     "background": {"random_background": "true", "clean_background_rate": "0.02"},
     "light": {"random_light": "true", "crazy_random_light_rate": "0.02"},
-    "clutter": {"cluttered_table": "true"},
+    # RoboTwin skips clutter when rand() < clean_background_rate; demo_clean's 1 skips it always.
+    "clutter": {"cluttered_table": "true", "clean_background_rate": "0.02"},
     "height": {"random_table_height": "0.03"},
 }
 

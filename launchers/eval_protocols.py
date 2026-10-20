@@ -224,15 +224,15 @@ def _libero_plus(
 
 
 def _derive_clean2rand_config(task_config: Path, axis: str) -> None:
-    """Write demo_<axis>.yml from demo_clean.yml (only if missing)."""
+    """Write demo_<axis>.yml from demo_clean.yml, unless it already has that content."""
     dst = task_config / f"demo_{axis}.yml"
-    if dst.exists():
-        return
     text = (task_config / "demo_clean.yml").read_text()
     for key, value in CLEAN2RAND_KEYS[axis].items():
         text, n = re.subn(rf"(?m)^(\s*{key}:).*$", rf"\g<1> {value}", text)
         if n != 1:
             raise SystemExit(f"{task_config}/demo_clean.yml: key {key!r} found {n} times")
+    if dst.exists() and dst.read_text() == text:
+        return
     dst.write_text(text)
     print(f"[eval] wrote {dst}", file=sys.stderr)
 
