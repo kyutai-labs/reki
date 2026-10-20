@@ -9,7 +9,7 @@ jobs:
     if: github.repository == 'kyutai-labs/reki'
     runs-on: ubuntu-latest
     environment:
-      name: push_to_pypi
+      name: pypi
     permissions:
       id-token: write
     steps:
