@@ -135,9 +135,6 @@ class RoboTwinSim:
         self.args: dict = {}
         self.instruction = ""
         self.episode_info: Any = None
-        # The scene of the last reset, closed by the next reset or make.
-        self._scene_open = False
-        self._n_closed = 0
 
     def _build_args(self, task_name: str) -> dict:
         """Replicates eval_policy.main()'s merge of task yml + embodiment + camera config."""
@@ -215,8 +212,6 @@ class RoboTwinSim:
         envs_module = importlib.import_module(f"envs.{task}")
         if not hasattr(envs_module, task):
             raise AttributeError(f"envs.{task} has no class {task!r}")
-        if self._scene_open:
-            self._close_quiet()
         self.task_name = task
         self.args = self._build_args(task)
         self.env = getattr(envs_module, task)()
@@ -278,21 +273,9 @@ class RoboTwinSim:
                 h.update(rel + b"\0" + hashlib.md5(f.read()).hexdigest().encode() + b"\n")
         return h.hexdigest()
 
-    def _close_env(self) -> None:
-        """close_env, freeing the render cache every ``clear_cache_freq`` closes as RoboTwin's
-        eval_policy.py does. Without it every texture and mesh a scene loads stays on the GPU: a
-        hard or clutter server fills it within hundreds of episodes ("cannot create buffer")."""
-        self._n_closed += 1
-        try:
-            self.env.close_env(
-                clear_cache=self._n_closed % self.args.get("clear_cache_freq", 1) == 0
-            )
-        finally:
-            self._scene_open = False
-
     def _close_quiet(self) -> None:
         try:
-            self._close_env()
+            self.env.close_env()
         except Exception:
             pass
 
@@ -313,15 +296,12 @@ class RoboTwinSim:
                 f"{self.task_name!r} sets {_PLAY_ONCE_ATTRS[self.task_name]} only in play_once: "
                 "apply scripts/eval/robotwin_arm_tag_fix.patch to the RoboTwin tree"
             )
-        if self._scene_open:
-            self._close_quiet()
         self.args["render_freq"] = 0
         try:
             self.env.setup_demo(now_ep_num=0, seed=seed, is_test=True, **self.args)
         except self._UnStableError as e:
             self._close_quiet()
             raise RuntimeError(f"trusted seed {seed} is unstable for {self.task_name!r}") from e
-        self._scene_open = True
         self.episode_info = None
         self.instruction = instruction
         self.env.set_instruction(instruction=instruction)
@@ -332,8 +312,6 @@ class RoboTwinSim:
             raise RuntimeError("reset before make")
         if trust:
             return self._reset_trusted(int(seed), instruction)
-        if self._scene_open:
-            self._close_quiet()
         start_seed = now_seed = int(seed)
         rejected = 0
         while True:
@@ -342,7 +320,7 @@ class RoboTwinSim:
                 try:
                     self.env.setup_demo(now_ep_num=0, seed=now_seed, is_test=True, **self.args)
                     self.episode_info = self.env.play_once()
-                    self._close_env()
+                    self.env.close_env()
                 except self._UnStableError as e:
                     print(f"[robotwin] seed {now_seed} unstable: {e}", flush=True)
                     self._close_quiet()
@@ -370,7 +348,6 @@ class RoboTwinSim:
                 rejected = self._reject(start_seed, rejected)
                 now_seed += 1
                 continue
-            self._scene_open = True
             break
 
         # The instruction pick draws from np.random and a trusted reset does not. Restore the

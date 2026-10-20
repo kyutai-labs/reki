@@ -238,7 +238,6 @@ class _FakeTaskEnv:
 
     def __init__(self) -> None:
         self.setups: list[int] = []
-        self.closes: list[bool] = []  # the clear_cache flag of each close_env
         actors = [_Entity("shoe", 1), _Entity("shoe", 2), _Entity("table", 3), _Entity("", 4)]
         link = _Entity("table", 9)  # an articulation link that shares an actor's name
         art = type("Art", (), {"get_links": lambda self: [link]})()
@@ -254,8 +253,8 @@ class _FakeTaskEnv:
     def play_once(self) -> dict:
         return {"info": {}}
 
-    def close_env(self, clear_cache: bool = False) -> None:
-        self.closes.append(clear_cache)
+    def close_env(self) -> None:
+        pass
 
     def check_success(self) -> bool:
         return False
@@ -284,7 +283,7 @@ def sim_server(monkeypatch: pytest.MonkeyPatch) -> tuple[ModuleType, Any]:
     spec.loader.exec_module(module)
     sim = object.__new__(module.RoboTwinSim)
     sim.env, sim.args, sim.task_name, sim.instruction = _FakeTaskEnv(), {}, "t", ""
-    sim.trusted_reset, sim._scene_open, sim._n_closed = True, False, 0
+    sim.trusted_reset = True
     sim._UnStableError = type("UnStableError", (Exception,), {})
     return module, sim
 
@@ -298,20 +297,6 @@ def test_server_trusted_reset(sim_server: tuple[ModuleType, Any]):
     assert sim.env.setups == [7] and reply["seed_used"] == 7
     assert reply["instruction"] == sim.env.instruction == "put the shoe"
     assert sorted(reply["sim_state"]["actors"]) == ["#4", "shoe#1", "shoe#2", "table#3"]
-
-
-def test_server_closes_the_last_scene_and_clears_the_render_cache(
-    sim_server: tuple[ModuleType, Any],
-):
-    _, sim = sim_server
-    sim.args["clear_cache_freq"] = 2
-    for seed in range(4):
-        sim.reset(seed, trust=True, instruction="x")
-    assert sim.env.setups == [0, 1, 2, 3]
-    # Each reset closes the scene of the one before; every 2nd close frees the render cache.
-    assert sim.env.closes == [False, True, False]
-    sim.close()
-    assert sim.env.closes == [False, True, False, True]
 
 
 def test_server_trusted_reset_needs_load_actors_to_set_the_play_once_state(
