@@ -843,8 +843,15 @@ class RekiFlowModel(nn.Module):
         separately (Inductor, no CUDA graphs). The Euler loop stays in Python
         (``_expert_actions``), so one compile serves every step count. ``ExpertGraphs`` then
         captures the whole expert of one predict as one CUDA graph per step count."""
-        from reki.vlm.qwen3_5.expert_graph import ExpertGraphs
+        import triton
 
+        from reki.vlm.qwen3_5.expert_graph import ExpertGraphs
+        from reki.vlm.qwen3_5.hf_patches import install_mrope_select
+
+        if triton.__version__.startswith("3.7."):  # torch 2.12 and 2.13
+            install_mrope_select(
+                type_cast(nn.Module, self.vlm_with_expert.text_backbone.rotary_emb)
+            )
         self._step_modulations = torch.compile(  # type: ignore[method-assign]
             self._step_modulations, dynamic=True
         )

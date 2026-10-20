@@ -4033,7 +4033,7 @@ packages:
 - pypi: .
   name: reki-vla
   requires_dist:
-  - torch>=2.10,!=2.12.*,!=2.13.*,<2.15
+  - torch>=2.10,<2.15
   - torchvision
   - flash-linear-attention>=0.4.2,<0.5
   - scipy

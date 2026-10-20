@@ -27,6 +27,7 @@ from transformers import AttentionInterface
 from transformers.models.qwen3_5.modeling_qwen3_5 import (
     Qwen3_5DecoderLayer,
     Qwen3_5GatedDeltaNet,
+    Qwen3_5TextRotaryEmbedding,
     apply_rotary_pos_emb_vision,
 )
 
@@ -398,3 +399,29 @@ def install_packed_decoder_layers(text_model: nn.Module) -> None:
         if type(layer) not in (Qwen3_5DecoderLayer, _PackedQwen3_5DecoderLayer):
             raise TypeError(f"expected stock Qwen3_5DecoderLayer, got {type(layer).__name__}")
         layer.__class__ = _PackedQwen3_5DecoderLayer
+
+
+class _SelectMRoPERotary(Qwen3_5TextRotaryEmbedding):
+    """HF text rotary with the interleaved MRoPE as a per-channel select (same values). Inductor
+    compiles the HF strided slice assignment to two masked gathers, which Triton 3.7 computes
+    wrongly at one element per thread."""
+
+    mrope_axis: torch.Tensor
+
+    def apply_interleaved_mrope(
+        self, freqs: torch.Tensor, mrope_section: list[int]
+    ) -> torch.Tensor:
+        axis = self.mrope_axis
+        return torch.where(axis == 1, freqs[1], torch.where(axis == 2, freqs[2], freqs[0]))
+
+
+def install_mrope_select(rotary: nn.Module) -> None:
+    """Swap the ``__class__`` of the HF text rotary to ``_SelectMRoPERotary``."""
+    if type(rotary) not in (Qwen3_5TextRotaryEmbedding, _SelectMRoPERotary):
+        raise TypeError(f"expected stock Qwen3_5TextRotaryEmbedding, got {type(rotary).__name__}")
+    inv_freq: torch.Tensor = rotary.inv_freq  # type: ignore[assignment]
+    axis = torch.zeros(inv_freq.shape[0], dtype=torch.long, device=inv_freq.device)
+    for dim in (1, 2):  # H, W: as the HF slice assignment
+        axis[dim : rotary.mrope_section[dim] * 3 : 3] = dim  # type: ignore[index]
+    rotary.register_buffer("mrope_axis", axis, persistent=False)
+    rotary.__class__ = _SelectMRoPERotary
