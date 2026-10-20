@@ -20,7 +20,7 @@
 ## News
 
 - **2026-10-20:** We published REKI on PyPI as `reki-vla` (`pip install reki-vla`), with
-  inference support for the released models. We moved from PyTorch 2.7 to 2.10 so that REKI no
+  inference support for the finetuned models. We moved from PyTorch 2.7 to 2.10 so that REKI no
   longer requires compiled CUDA extensions (`flash-attn` and `causal-conv1d`).
 
 ## Model
@@ -110,7 +110,7 @@ together.
 
 ## Installation
 
-To run the released models ([Quickstart](#quickstart)), install the package from PyPI:
+To run the finetuned models ([Quickstart](#quickstart)), install the package from PyPI:
 
 ```bash
 pip install reki-vla    # or: uv add reki-vla
