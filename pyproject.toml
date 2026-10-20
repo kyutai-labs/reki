@@ -16,16 +16,17 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Operating System :: POSIX :: Linux",
     "Environment :: GPU :: NVIDIA CUDA :: 12",
+    "Environment :: GPU :: NVIDIA CUDA :: 13",
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 
 dependencies = [
-    "torch>=2.10,<2.11",
+    "torch>=2.10,!=2.12.*,!=2.13.*,<2.15",
     "torchvision",
     "flash-linear-attention>=0.4.2,<0.5",
     "scipy",
-    "transformers>=5.3,<5.4",
+    "transformers>=5.3,<5.9",
     "numpy",
     "huggingface_hub",
     "pillow",

@@ -8,8 +8,10 @@
 
 ## Installation
 
-Requires Linux x86-64, Python 3.12, an NVIDIA GPU of the Ampere generation or newer with
-driver 570 or newer (CUDA 12.8), a C compiler and the Python 3.12 headers.
+Requires Linux x86-64, Python 3.12, an NVIDIA GPU of the Ampere generation or newer, a C
+compiler and the Python 3.12 headers. The default PyPI build of PyTorch needs NVIDIA driver 580
+or newer (CUDA 13). With driver 570, install a CUDA 12.8 build first:
+`pip install torch==2.10.0 torchvision==0.25.0 --index-url https://download.pytorch.org/whl/cu128`.
 
 ```bash
 pip install reki-vla    # or: uv add reki-vla

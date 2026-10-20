@@ -14,8 +14,6 @@ DEVICE = torch.device("cuda")
 
 @pytest.mark.parametrize("is_causal", [True, False])
 def test_varlen_gqa_matches_repeat(is_causal: bool) -> None:
-    from torch.nn.attention.varlen import varlen_attn
-
     from reki.vlm.common import cu_seqlens_from, varlen_attention
 
     torch.manual_seed(0)
@@ -29,7 +27,7 @@ def test_varlen_gqa_matches_repeat(is_causal: bool) -> None:
     grad = torch.randn(T, H, D, device=DEVICE, dtype=torch.bfloat16)
 
     out = varlen_attention(q, k, v, cu, cu, max(lens), max(lens), is_causal=is_causal)
-    ref = varlen_attn(
+    ref = varlen_attention(
         q,
         k.repeat_interleave(rep, dim=1),
         v.repeat_interleave(rep, dim=1),
@@ -39,7 +37,6 @@ def test_varlen_gqa_matches_repeat(is_causal: bool) -> None:
         max(lens),
         is_causal=is_causal,
     )
-    assert isinstance(ref, torch.Tensor)
     grads = torch.autograd.grad(out, (q, k, v), grad)
     ref_grads = torch.autograd.grad(ref, (q, k, v), grad)
 

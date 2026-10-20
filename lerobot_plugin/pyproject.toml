@@ -6,7 +6,7 @@ readme = "README.md"
 license = "MIT"
 authors = [{ name = "Kyutai" }]
 requires-python = ">=3.12,<3.13"
-dependencies = ["reki-vla", "lerobot[async]==0.5.1", "gymnasium"]
+dependencies = ["reki-vla", "lerobot[async]==0.5.1", "transformers>=5.3,<5.4", "gymnasium"]
 
 [project.urls]
 Homepage = "https://kyutai.org/reki"

@@ -231,7 +231,12 @@ class TinyQwenAuto:
             raise ValueError(f"tiny Qwen stands in for {QWEN} only, got {model_id!r}")
         with torch.random.fork_rng(devices=[]):
             torch.manual_seed(1234)
-            return AutoModelForImageTextToText.from_config(tiny_qwen_config(), **kwargs)
+            model = AutoModelForImageTextToText.from_config(tiny_qwen_config(), **kwargs)
+            # transformers 5.8+ no longer draws matrix weights from N(0, 0.02)
+            for p in model.parameters():
+                if p.dim() > 1:
+                    torch.nn.init.normal_(p, std=0.02)
+            return model
 
     @staticmethod
     def from_config(config: Any, **kwargs: Any) -> Any:
