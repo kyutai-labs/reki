@@ -37,7 +37,7 @@ and `ExpertGraphs` replays one predict as one CUDA graph.
 
 ## Pinned versions
 
-`pyproject.toml` pins the versions of Transformers, FLA and torch.
+`pyproject.toml` bounds the versions of Transformers, FLA and torch for `reki-vla` and pins them for the pixi environment.
 `hf_patches` re-implements HF forwards and checks the patched HF layout:
 `install_vision_varlen` and `install_packed_decoder_layers` raise on a mismatch, so a Transformers
 upgrade requires these patches to be checked again. `fla_inference_configs` pins FLA kernel configurations by name.
