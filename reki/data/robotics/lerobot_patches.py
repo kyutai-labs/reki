@@ -287,7 +287,7 @@ def dedup_video_check(self: Any) -> bool:
                 )
                 if fpath in checked:
                     continue
-                if not (self._root / fpath).exists():
+                if not (self.root / fpath).exists():
                     return False
                 checked.add(fpath)
 

@@ -3,34 +3,35 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "reki"
+name = "reki-vla"
 version = "0.1.0"
 description = "REKI: a vision-language-action model with register tokens in the action expert"
-readme = "README.md"
-license = "MIT"
+readme = "PYPI.md"
+license = "MIT AND Apache-2.0"
 authors = [{ name = "Kyutai" }]
 requires-python = ">=3.12,<3.13"
+keywords = ["robotics", "vision-language-action", "vla", "flow-matching", "lerobot"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: POSIX :: Linux",
+    "Environment :: GPU :: NVIDIA CUDA :: 12",
+    "Environment :: GPU :: NVIDIA CUDA :: 13",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 
 dependencies = [
-    "torchcodec==0.4.0",
-    "lerobot[async] @ git+https://github.com/huggingface/lerobot.git@aa9cc9bd43e9eba92a32aaadde2a09c90b5836cf",
-    "accelerate",
-    "fire",
-    # Compiled CUDA deps (torch, torchvision, flash-attn, causal-conv1d) live in the `nvidia` feature.
-    "flash-linear-attention==0.4.2",
+    "torch>=2.10,<2.15",
+    "torchvision",
+    "flash-linear-attention>=0.4.2,<0.5",
     "scipy",
-    "transformers==5.3.0",
-    "fsspec",
-    "tqdm",
+    "transformers>=5.3,<5.9",
     "numpy",
-    "pyarrow",
     "huggingface_hub",
     "pillow",
-    "imageio",
     "safetensors",
     "pyyaml",
-    "pandas",
-    "grpcio",
 ]
 
 [project.urls]
@@ -74,8 +75,24 @@ channels = ["conda-forge"]
 platforms = ["linux-64"]
 
 [tool.pixi.pypi-dependencies]
-reki = { path = ".", editable = true }
+reki-vla = { path = ".", editable = true }
 lerobot_policy_reki = { path = "lerobot_plugin", editable = true }
+# Tested LeRobot release for training, eval and deployment; inference needs none.
+lerobot = { version = "==0.5.1", extras = ["async"] }
+# Tested versions for training and eval.
+torch = "==2.10.0"
+torchvision = "==0.25.0"
+torchcodec = "==0.10.0"
+transformers = "==5.3.0"
+flash-linear-attention = "==0.4.2"
+# Imported directly by training, eval and deployment code.
+accelerate = "*"
+fire = "*"
+fsspec = "*"
+tqdm = "*"
+pyarrow = "*"
+imageio = "*"
+grpcio = "*"
 
 [tool.pixi.activation.env]
 # Per-env lib dir via $CONDA_PREFIX so each env's lib/ (e.g. the sim env's
@@ -86,15 +103,6 @@ LD_LIBRARY_PATH = "$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
 # default to <repo>/storage/ when unset.
 [tool.pixi.activation]
 scripts = ["scripts/load_env.sh"]
-
-# nvidia feature: torch/torchvision from PyPI (CUDA build); flash-attn and
-# causal-conv1d as prebuilt cu12/torch2.7 wheels (no source build).
-[tool.pixi.feature.nvidia.pypi-dependencies]
-torch = "==2.7.0"
-torchvision = "*"
-triton = "==3.3.0"
-flash-attn = { url = "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.7cxx11abiTRUE-cp312-cp312-linux_x86_64.whl" }
-causal-conv1d = { url = "https://github.com/Dao-AILab/causal-conv1d/releases/download/v1.5.4/causal_conv1d-1.5.4+cu12torch2.7cxx11abiTRUE-cp312-cp312-linux_x86_64.whl" }
 
 [tool.pixi.dependencies]
 ffmpeg = ">=7,<8"
@@ -145,7 +153,7 @@ wand = "*"
 mujoco = "==3.3.2"
 PyOpenGL = "*"
 PyOpenGL-accelerate = "*"
-# torch comes from the nvidia feature; transformers is shared in [project].dependencies.
+# torch and transformers come from [tool.pixi.pypi-dependencies].
 
 [tool.pixi.tasks]
 # Uses every visible GPU (multi-GPU when more than one); bf16 is set in train.py.
@@ -169,6 +177,6 @@ pyright = "==1.1.398"
 pytest = "*"
 
 [tool.pixi.environments]
-default = ["nvidia", "launch", "dev"]
-sim = ["sim", "nvidia"]
-sim-plus = ["sim-plus", "nvidia"]
+default = ["launch", "dev"]
+sim = ["sim"]
+sim-plus = ["sim-plus"]

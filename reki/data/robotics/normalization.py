@@ -13,11 +13,11 @@ from typing import Literal
 
 import numpy as np
 import torch
-from lerobot.utils.constants import ACTION, OBS_STATE
 
 from reki.data.robotics.mirror import MirrorSpec
 from reki.data.robotics.registry import AXIS_ANGLE
 from reki.data.robotics.transforms import gather_with_pad
+from reki.policy.constants import ACTION, OBS_STATE
 
 
 def quantile_keys(stats: dict[str, torch.Tensor]) -> tuple[str, str]:

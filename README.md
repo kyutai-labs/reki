@@ -17,6 +17,12 @@
 
 </div>
 
+## News
+
+- **2026-10-20:** We published REKI on PyPI as `reki-vla` (`pip install reki-vla`), with
+  inference support for the finetuned models. We moved from PyTorch 2.7 to 2.10 so that REKI no
+  longer requires compiled CUDA extensions (`flash-attn` and `causal-conv1d`).
+
 ## Model
 
 REKI is a vision-language-action (VLA) model. A Qwen3.5-2B VLM encodes the camera views and the
@@ -104,7 +110,19 @@ together.
 
 ## Installation
 
-Requires Linux x86-64, an NVIDIA GPU with CUDA 12 and [pixi](https://pixi.sh). The pixi environment provides Python 3.12.
+Requires Linux x86-64, Python 3.12, an NVIDIA GPU of the Ampere generation or newer, a C
+compiler and the Python 3.12 headers. The default PyPI build of PyTorch needs NVIDIA driver 580
+or newer (CUDA 13). With driver 570, install a CUDA 12.8 build first:
+`pip install torch==2.10.0 torchvision==0.25.0 --index-url https://download.pytorch.org/whl/cu128`.
+
+To run the finetuned models ([Quickstart](#quickstart)), install the package from PyPI:
+
+```bash
+pip install reki-vla    # or: uv add reki-vla
+```
+
+Training, evaluation and deployment run from the repository, with [pixi](https://pixi.sh). The
+pixi environment provides Python 3.12:
 
 ```bash
 git clone https://github.com/kyutai-labs/reki.git
@@ -137,9 +155,8 @@ cp .env.example .env   # then edit .env
 <details>
 <summary>Version pins</summary>
 
-`pixi.lock` pins all versions. The [Results](#results) use `torch==2.7.0`,
-`transformers==5.3.0`, `flash-linear-attention==0.4.2`, `flash-attn` 2.8.3 and `lerobot` rev
-`aa9cc9b`.
+`pixi.lock` pins all versions, among them `torch==2.10.0`, `transformers==5.3.0`,
+`flash-linear-attention==0.4.2` and `lerobot==0.5.1`.
 
 </details>
 

@@ -72,7 +72,6 @@ class _LayoutGraph:
         # and its chunk indices live in the graph's memory pool.
         cu = cu_single(L, self.device)
         cu_cpu = torch.tensor([0, L], dtype=torch.long)
-        seq_idx = torch.zeros((1, L), dtype=torch.int32, device=self.device)
         cache_position = torch.arange(L, device=self.device)
         position_embeddings = text.rotary_emb(prefix, self.position_ids)
         h = prefix
@@ -90,7 +89,6 @@ class _LayoutGraph:
                 max_length_q=L,
                 max_length_k=L,
                 gdn_cu_seqlens=cu.long(),
-                gdn_seq_idx=seq_idx,
                 gdn_cu_seqlens_cpu=cu_cpu,
             )
         return text.norm(h)

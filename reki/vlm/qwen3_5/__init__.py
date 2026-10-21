@@ -1,6 +1,6 @@
 """Qwen3.5 with the action expert (file map: README.md). ``action_expert``, ``cuda_graph``,
 ``preprocessor`` and ``image_processor`` import on a CPU-only host; the other modules import the
-CUDA kernels (flash-attn, FLA)."""
+CUDA kernels (torch varlen attention, FLA)."""
 
 
 def check_model_id(vlm_model_id: str) -> None:

@@ -45,7 +45,7 @@ def _reader(
     }
     meta.episodes = datasets.Dataset.from_dict(cols)
     hf = datasets.Dataset.from_dict({"episode_index": [e for e in hf_eps for _ in range(3)]})
-    return SimpleNamespace(hf_dataset=hf, episodes=episodes, _meta=meta, _root=root)
+    return SimpleNamespace(hf_dataset=hf, episodes=episodes, _meta=meta, root=root)
 
 
 def _touch_all(root: Path, skip: tuple[str, int] | None = None, two_chunks: bool = False) -> None:

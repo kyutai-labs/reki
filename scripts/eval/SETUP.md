@@ -51,6 +51,7 @@ mrun() { local b=$1; shift; env PYTHONNOUSERSITE=1 PYTHONPATH= "$S/bin/micromamb
 - Pixi env `sim-plus`. It pins the runtime deps: `robosuite==1.4.0`, `bddl==1.0.1`, `robomimic==0.2.0`, `mujoco==3.3.2`, `wand` + conda `imagemagick`, `mesalib==25.0.5`.
 - The eval puts the LIBERO-Plus clone on `PYTHONPATH`. **Do not pip-install it.**
 - LIBERO-Plus reads its assets only from `libero/libero/assets` in the clone. `install.sh` unzips them there.
+- NumPy 2 removed `np.float_`, which the `fog` sensor noise uses. `install.sh` changes it to `np.float64` (the same type) in `libero/libero/envs/env_wrapper.py`.
 
 ## RoboTwin 2.0
 
@@ -153,7 +154,7 @@ The pins are variables at the top of `scripts/eval/install.sh` and `scripts/eval
 | LIBERO sim | PyPI `libero==0.1.1`, `mujoco==3.3.2`, `mesalib==25.0.5` (`pixi.lock`, env `sim`) |
 | LIBERO assets | HF `lerobot/libero-assets` @ `0b3ea86be5fe169d0fd036ae63d1070ec09e90f6` |
 | LIBERO bddl/init | bundled in PyPI `libero==0.1.1` |
-| LIBERO-Plus | `sylvestf/LIBERO-plus` @ `4976dc30028e805ff8094b55501d532c48fec182`; deps in `pixi.lock` (env `sim-plus`) |
+| LIBERO-Plus | `sylvestf/LIBERO-plus` @ `4976dc30028e805ff8094b55501d532c48fec182` + the `np.float_` patch (`install.sh`); deps in `pixi.lock` (env `sim-plus`) |
 | LIBERO-Plus assets | HF `Sylvest/LIBERO-plus` `assets.zip`, not pinned |
 | RoboTwin | `RoboTwin-Platform/RoboTwin` @ `c3ddfa8b97d5519efa828b075999bd0006778e5e`; CuRobo `v0.7.8`; `torch` 2.4.1; `sapien` 3.0.0b1; CUDA 12.1.1 |
 | RoboTwin `pytorch3d` | `facebookresearch/pytorch3d` @ `75ebeeaea0908c5527e7b1e305fbc7681382db47` (0.7.8) |

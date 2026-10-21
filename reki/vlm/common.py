@@ -2,11 +2,44 @@
 
 from __future__ import annotations
 
+import inspect
+from typing import Any
+
 import torch
+from torch.nn.attention.varlen import varlen_attn
+
+# torch 2.10 takes ``is_causal``; 2.11+ takes ``window_size`` ((-1, 0) is causal). 2.12+ needs
+# ``enable_gqa`` for GQA; it also keeps 2.14 off its cuDNN backend.
+_VARLEN_PARAMS = inspect.signature(varlen_attn).parameters
+
+
+def varlen_attention(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    cu_q: torch.Tensor,
+    cu_k: torch.Tensor,
+    max_q: int,
+    max_k: int,
+    is_causal: bool = False,
+) -> torch.Tensor:
+    """torch's varlen flash attention over packed ``[T, H, D]`` rows, scale ``D**-0.5``. ``k``
+    and ``v`` may have fewer heads than ``q`` (GQA): the FA2 kernel maps query head ``h`` to KV
+    head ``h // (H / H_kv)``, as HF's ``repeat_kv``. ``varlen_attn`` does not document it;
+    ``tests/model/test_varlen_gqa.py`` pins it."""
+    if "is_causal" in _VARLEN_PARAMS:
+        kwargs: dict[str, Any] = {"is_causal": is_causal}
+    else:
+        kwargs = {"window_size": (-1, 0) if is_causal else (-1, -1)}
+        if "enable_gqa" in _VARLEN_PARAMS:
+            kwargs["enable_gqa"] = True
+    out = varlen_attn(q, k, v, cu_q, cu_k, max_q, max_k, **kwargs)
+    assert isinstance(out, torch.Tensor)
+    return out
 
 
 def cu_seqlens(counts: torch.Tensor) -> torch.Tensor:
-    """Cumulative sequence lengths for flash_attn_varlen / FLA kernels."""
+    """Cumulative sequence lengths for the varlen attention / FLA kernels."""
     return torch.cat(
         [torch.zeros(1, device=counts.device, dtype=torch.int32), counts.cumsum(0)]
     ).to(torch.int32)

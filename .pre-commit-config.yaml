@@ -1,0 +1,13 @@
+repos:
+- repo: https://github.com/astral-sh/ruff-pre-commit
+  rev: v0.15.17
+  hooks:
+    - id: ruff-check
+    - id: ruff-format
+- repo: local
+  hooks:
+    - id: check-links
+      name: Markdown links
+      entry: python scripts/check_links.py
+      language: system
+      pass_filenames: false
