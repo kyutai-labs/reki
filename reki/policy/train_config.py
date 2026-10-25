@@ -29,6 +29,7 @@ STATE_MLP_EMBODIMENTS: dict[str, int] = {
     "panda_omron": 16,
     "airbot_mmk2": 24,
     "unitree_g1": 28,
+    "so101": 6,
 }
 
 

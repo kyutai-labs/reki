@@ -113,6 +113,14 @@ DATASETS: dict[str, DatasetSpec] = {
         action_slice=list(range(0, 12)),
         mirror="panda_omron_base_y",
     ),
+    "so101_bowls": DatasetSpec(
+        "SO-101",
+        ABSOLUTE_JOINT,
+        _cams(front_top_camera="top", wrist_camera="wrist_left"),
+        "so101",
+        root=Path("ravediamond"),
+        robot_type="so101",
+    ),
 }
 
 

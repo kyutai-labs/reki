@@ -35,6 +35,22 @@ BENCHMARKS: dict[str, dict[str, object]] = {
         "state_mlp_embodiments": ALOHA,
         "gradient_accumulation_steps": 1,
     },
+    # One GPU (`pixi run train` with these fields as flags): batch 30 x 12 = the UR5 global batch
+    # of 360. Add train_expert_only=True and train_vision_blocks=0 to freeze the VLM (~16 GiB peak).
+    "so101_bowls": {
+        "dataset": "so101_bowls",
+        "steps": 3_500,
+        "warmup_steps": 100,
+        "lr": 5e-5,
+        "backbone_lr_scale": 0.1,
+        "decay_steps": 500,
+        "chunk_duration_s": 2.0,
+        "history_stride_s": 1.0,
+        "mirror_prob": 0.0,
+        "state_mlp_embodiments": {"so101": 6},
+        "batch_size": 30,
+        "gradient_accumulation_steps": 12,
+    },
 }
 
 EVAL_TASK = {

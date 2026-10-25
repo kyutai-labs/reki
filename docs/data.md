@@ -86,9 +86,10 @@ supervised separately, padded with zeros to 32 dims.
 | `airbot_mmk2` | 24 | arm and hand joints of both arms | `robocoin_airbot_mmk2` |
 | `unitree_g1` | 28 | arm and hand joints of both arms | `robocoin_unitree_g1_28`, `robocoin_unitree_g1_30` |
 | `panda_omron` | 16 | base pose (3+4), end-effector pose in the base frame (3+4), gripper 2 | `robocasa365` (finetuning only) |
+| `so101` | 6 | 5 joints, gripper | `so101_bowls` (finetuning only) |
 
 The first 14 keys have a trained state MLP in `kyutai/reki-2b`. Finetuning adds
-`panda_omron` and the mirrored keys `single_arm_ee_euler_mirrored`, `aloha_mirrored` and
+`panda_omron`, `so101` and the mirrored keys `single_arm_ee_euler_mirrored`, `aloha_mirrored` and
 `panda_omron_mirrored`, which have the format of their base key.
 
 ### Slices
