@@ -23,6 +23,12 @@ CHUNK_2 = [0, 0, 0, 1, 1, 1, 1]
 FILE_2 = [0, 0, 1, 0, 0, 1, 1]
 
 
+class _Info(dict):
+    """LeRobot 0.7 reads ``meta.info.total_episodes``; our patch still indexes it like a dict."""
+
+    __getattr__ = dict.__getitem__
+
+
 def _reader(
     root: Path,
     *,
@@ -38,11 +44,13 @@ def _reader(
         cols[f"videos/{k}/file_index"] = (FILE_2 if two_chunks else FILE_OF_EP[k])[:n_meta_eps]
     meta = object.__new__(LeRobotDatasetMetadata)
     meta.root = root
-    meta.info = {
-        "video_path": VIDEO_PATH,
-        "total_episodes": 7,
-        "features": {k: {"dtype": "video"} for k in video_keys},
-    }
+    meta.info = _Info(
+        {
+            "video_path": VIDEO_PATH,
+            "total_episodes": 7,
+            "features": {k: {"dtype": "video"} for k in video_keys},
+        }
+    )
     meta.episodes = datasets.Dataset.from_dict(cols)
     hf = datasets.Dataset.from_dict({"episode_index": [e for e in hf_eps for _ in range(3)]})
     return SimpleNamespace(hf_dataset=hf, episodes=episodes, _meta=meta, root=root)

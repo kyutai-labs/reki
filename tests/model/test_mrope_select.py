@@ -23,5 +23,5 @@ def test_mrope_select_matches_hf_interleave() -> None:
 
     torch.manual_seed(0)
     freqs = torch.randn(3, 2, 5, rotary.inv_freq.shape[0])
-    ref = rotary.apply_interleaved_mrope(freqs.clone(), rotary.mrope_section)
-    assert torch.equal(select.apply_interleaved_mrope(freqs, select.mrope_section), ref)
+    ref = rotary.recomposition_frequencies(freqs.clone())
+    assert torch.equal(select.recomposition_frequencies(freqs), ref)

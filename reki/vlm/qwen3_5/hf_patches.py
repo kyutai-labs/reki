@@ -212,19 +212,16 @@ def install_vision_varlen(vlm: nn.Module) -> None:
     if visual is None:
         raise RuntimeError("install_vision_varlen: vision tower not found")
     # The patched forward re-implements HF's: refuse any layout it does not cover.
-    expected_sig = [
-        "self",
-        "hidden_states",
-        "cu_seqlens",
-        "rotary_pos_emb",
-        "position_embeddings",
-        "kwargs",
+    # transformers 5.3 passes ``rotary_pos_emb``; 5.22 dropped it and passes ``max_seqlen``.
+    expected_sigs = [
+        ["self", "hidden_states", "cu_seqlens", "rotary_pos_emb", "position_embeddings", "kwargs"],
+        ["self", "hidden_states", "cu_seqlens", "position_embeddings", "max_seqlen", "kwargs"],
     ]
     for blk in visual.blocks:
         attn = blk.attn
         sig = list(inspect.signature(type(attn).forward).parameters)
         children = sorted(n for n, _ in attn.named_children())
-        if sig != expected_sig or children != ["proj", "qkv"]:
+        if sig not in expected_sigs or children != ["proj", "qkv"]:
             raise RuntimeError(
                 f"install_vision_varlen: unexpected {type(attn).__name__} layout "
                 f"(forward params {sig}, children {children})"
@@ -242,6 +239,7 @@ def install_vision_varlen(vlm: nn.Module) -> None:
         cu_seqlens: torch.Tensor,
         rotary_pos_emb: torch.Tensor | None = None,
         position_embeddings: tuple[torch.Tensor, torch.Tensor] | None = None,
+        max_seqlen: int | None = None,
         **kwargs: Any,
     ) -> torch.Tensor:
         assert position_embeddings is not None
@@ -281,7 +279,10 @@ def install_vision_varlen(vlm: nn.Module) -> None:
 
         return tiled
 
+    # transformers 5.22 computes both tables with module-level functions inside ``forward``.
     for name in ("rot_pos_emb", "fast_pos_embed_interpolate"):
+        if not hasattr(type(visual), name):
+            continue
         setattr(visual, name, types.MethodType(per_grid(getattr(type(visual), name)), visual))
 
 
@@ -367,7 +368,7 @@ class _PackedQwen3_5DecoderLayer(Qwen3_5DecoderLayer):
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
 
-        if self.layer_type == "linear_attention":
+        if self.block_type == "linear_attention":
             if gdn_cu_seqlens is None:
                 raise ValueError("packed GDN layer requires gdn_cu_seqlens (packed BS=1)")
             assert past_key_values is None, "packed GDN forward is cache-free"
@@ -408,11 +409,10 @@ class _SelectMRoPERotary(Qwen3_5TextRotaryEmbedding):
 
     mrope_axis: torch.Tensor
 
-    def apply_interleaved_mrope(
-        self, freqs: torch.Tensor, mrope_section: list[int]
-    ) -> torch.Tensor:
+    def recomposition_frequencies(self, freq: torch.Tensor) -> torch.Tensor:
         axis = self.mrope_axis
-        return torch.where(axis == 1, freqs[1], torch.where(axis == 2, freqs[2], freqs[0]))
+        sel = torch.where(axis == 1, freq[1], torch.where(axis == 2, freq[2], freq[0]))
+        return torch.cat((sel, sel), dim=-1)
 
 
 def install_mrope_select(rotary: nn.Module) -> None:

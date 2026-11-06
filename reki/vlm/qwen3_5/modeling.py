@@ -404,7 +404,8 @@ class Qwen3_5VLMWithExpert(Qwen3_5ExpertInference, nn.Module):
             with torch.profiler.record_function("vision_encode"):
                 vision_out = self.mm_model.get_image_features(  # type: ignore[attr-defined]
                     pixel_values=torch.cat(px).to(device=device, dtype=dtype),
-                    image_grid_thw=torch.cat(gx),
+                    # transformers 5.22 builds the vision position tables on the device of grid_thw
+                    image_grid_thw=torch.cat(gx).to(device),
                 )
             image_features = torch.cat(vision_out.pooler_output, dim=0)
             seg_has_px = torch.tensor(with_px).repeat_interleave(torch.tensor(lens))
