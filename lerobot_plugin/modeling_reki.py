@@ -2,11 +2,14 @@
 
 ``select_action`` keeps an action queue and predicts only when it is empty, so one predict
 runs every ``n_action_steps`` (= history_stride_s × fps) env steps: the register-memory cadence
-the model was trained with.
+the model was trained with. ``lerobot-policy-server`` calls ``predict_action_chunk`` directly, once
+per executed chunk, and ``chunk_inference_spec`` declares that contract.
 """
 
 from __future__ import annotations
 
+import logging
+import time
 from collections import deque
 from pathlib import Path
 from typing import Any
@@ -14,12 +17,19 @@ from typing import Any
 import numpy as np
 import torch
 from lerobot.configs.policies import PreTrainedConfig
+from lerobot.policies.chunk import ChunkPolicySpec, ExecutionMode
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.utils.constants import OBS_STATE
 from torch import Tensor
 
 from lerobot_policy_reki.configuration_reki import RekiConfig
 from reki.inference.policy import RekiPolicy as _RekiPolicy
+
+logger = logging.getLogger(__name__)
+
+# A served predict closer than this fraction of the stride to the previous one is logged. The
+# client's aligned merge (LeRobot's default) asks about every half stride, append every stride.
+MIN_STRIDE_FRACTION = 0.75
 
 
 def to_uint8_hwc(img: Tensor) -> np.ndarray:
@@ -40,6 +50,8 @@ class RekiPolicy(PreTrainedPolicy):
         self.reki = reki_policy
         self.model = reki_policy.policy
         self._queue: deque[Tensor] = deque()
+        self._last_predict: float | None = None
+        self.cadence_violations = 0
 
     @classmethod
     def from_pretrained(
@@ -73,6 +85,23 @@ class RekiPolicy(PreTrainedPolicy):
     def reset(self) -> None:
         self.reki.reset()
         self._queue.clear()
+        self._last_predict = None
+
+    def chunk_inference_spec(self) -> ChunkPolicySpec:
+        """What ``lerobot-policy-server`` may assume about this policy.
+
+        One request returns ``n_action_steps`` actions and the robot plays all of them before the
+        next request, so the register memory sees one frame per ``history_stride_s``. The memory is
+        session state (``reset`` clears it). RTC stays off: its chunk would have to be longer than
+        the stride plus the inference delay, which no checkpoint is trained for.
+        """
+        steps = self.config.n_action_steps
+        return ChunkPolicySpec(
+            prediction_steps=steps,
+            execution_steps=steps,
+            modes=(ExecutionMode.CHUNK,),
+            retains_session_state=True,
+        )
 
     def get_optim_params(self) -> dict:
         raise NotImplementedError("the reki LeRobot plugin is inference-only")
@@ -80,9 +109,40 @@ class RekiPolicy(PreTrainedPolicy):
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict | None]:
         raise NotImplementedError("the reki LeRobot plugin is inference-only")
 
+    def _check_cadence(self) -> None:
+        """Log a request that follows the previous one by much less than one stride.
+
+        The register memory takes one frame per predict, so a faster cadence changes the frame
+        spacing the model was trained on and nothing in the model detects it. Wall clock is the
+        only signal a server has; ``select_action`` (simulation, faster than real time) skips this.
+        """
+        now = time.monotonic()
+        last, self._last_predict = self._last_predict, now
+        if last is None or self.config.fps <= 0:
+            return
+        stride_s = self.config.n_action_steps / self.config.fps
+        if now - last < MIN_STRIDE_FRACTION * stride_s:
+            self.cadence_violations += 1
+            logger.warning(
+                "predict %.2f s after the previous one; the register memory was trained at one "
+                "predict per %.2f s (n_action_steps=%d at %.1f fps). Play the whole chunk before "
+                "requesting the next.",
+                now - last,
+                stride_s,
+                self.config.n_action_steps,
+                self.config.fps,
+            )
+
     @torch.no_grad()
     def predict_action_chunk(self, batch: dict[str, Any], **kwargs: Any) -> Tensor:
-        """[1, n_action_steps, action_dim] env-ready actions (unnormalized, native rotation)."""
+        """[1, n_action_steps, action_dim] env-ready actions (unnormalized, native rotation).
+
+        This is the call a policy server makes, once per executed chunk.
+        """
+        self._check_cadence()
+        return self._predict(batch)
+
+    def _predict(self, batch: dict[str, Any]) -> Tensor:
         if len(batch["task"]) != 1:
             raise ValueError("batched inference is not supported yet: use --eval.batch_size=1")
         images = {}
@@ -102,5 +162,5 @@ class RekiPolicy(PreTrainedPolicy):
     def select_action(self, batch: dict[str, Any], **kwargs: Any) -> Tensor:
         """The next queued action, predicting a new chunk when needed."""
         if not self._queue:
-            self._queue.extend(self.predict_action_chunk(batch)[0])
+            self._queue.extend(self._predict(batch)[0])
         return self._queue.popleft()[None]

@@ -259,32 +259,37 @@ Only the model changes.
 ## Real-robot deployment
 
 Finetune `kyutai/reki-2b` on your robot data
-([docs/training.md](docs/training.md#finetune-on-your-robot)), then serve it over the
-[LeRobot async-inference](https://huggingface.co/docs/lerobot/async) gRPC protocol. The GPU
-machine needs the checkpoint and the `meta/` directory of the finetuning dataset under
-`REKI_DATASETS_ROOT`, or an exported checkpoint
-([docs/training.md](docs/training.md#export)).
+([docs/training.md](docs/training.md#finetune-on-your-robot)), export it
+([docs/training.md](docs/training.md#export)), then serve it with LeRobot's
+[`lerobot-policy-server`](https://github.com/huggingface/lerobot/blob/v0.7.0/src/lerobot/remote_inference/README.md)
+(LeRobot 0.7.0 or later, `lerobot[remote]`). The server loads the plugin through
+`register_third_party_plugins()`. Copy
+[`examples/lerobot_policy_server/server.yaml`](examples/lerobot_policy_server/server.yaml) and set the
+checkpoint path, the state, action and image names and shapes of the exported `config.json`, and your
+robot's `semantics`.
 
 ```bash
-pixi run python scripts/deploy/policy_server_lerobot.py --ckpt=runs/<run>/checkpoint-N \
-    --dataset=<your_dataset> --port=8080
+lerobot-policy-server --config_path=examples/lerobot_policy_server/server.yaml
 # check the server without a robot
-pixi run python scripts/deploy/lerobot_dummy_client.py --ckpt=runs/<run>/checkpoint-N \
-    --dataset=<your_dataset> --server_address=127.0.0.1:8080 --cycles=3 --probe_gate=True
+python scripts/deploy/lerobot_remote_probe.py --deployment=reki --semantics=<semantics> --seconds=60
 # on the robot
-python -m lerobot.async_inference.robot_client --server_address=localhost:8080 \
-    --actions_per_chunk=<n_action_steps> --fps=<dataset fps> --policy_type=reki \
-    --pretrained_name_or_path=reki --robot.type=<robot type> --task="<instruction>" …
+lerobot-rollout --inference.type=remote --inference.endpoint=tcp/127.0.0.1:7447 \
+    --inference.deployment=reki --inference.mode=chunk --inference.chunk_merge=append \
+    --inference.semantics=<semantics> \
+    --robot.type=<robot type> --task="<instruction>" …
 ```
 
-- The robot uses the state, action and camera names of the recorded dataset. The server maps
-  them by name.
-- `--actions_per_chunk` must equal the `n_action_steps` that the server logs at startup. The
-  server ignores `--policy_type` and `--pretrained_name_or_path`: it serves its `--ckpt`.
-- The server predicts once per `history_stride_s` ([predict cadence](docs/architecture.md#inference)).
-  After 5 s without a prediction, the next one starts a new episode (`--idle_reset_s`).
-- The server binds `127.0.0.1` by default (`--host`). The protocol unpickles client messages:
-  anyone who reaches the port can run code on the machine. Use an SSH tunnel or a trusted network.
+- The robot sends the state names, camera names and shapes of the YAML `features`. The server
+  rejects a client whose names or order differ.
+- `execution.n_action_steps` is `history_stride_s` × fps, the `n_action_steps` of the exported
+  `config.json`. The robot plays the whole chunk before it asks again, so the server predicts once per
+  `history_stride_s` ([predict cadence](docs/architecture.md#inference)). Use `--inference.chunk_merge=append`:
+  LeRobot's default (`aligned`) replaces the queue whenever the refill threshold is reached, which asks
+  about twice per stride. The plugin logs a request that follows the previous one by less than three
+  quarters of a stride.
+- A new session resets the register memory (`RekiPolicy.reset()`). RTC is off.
+- The Zenoh endpoint defaults to `127.0.0.1`. Use an SSH tunnel or a trusted network to reach it from
+  another machine.
 
 ## Pretraining
 
