@@ -31,10 +31,23 @@ class _LayoutGraph:
         # The vision tower's layout-only inputs, exactly as Qwen3_5VisionModel.forward makes
         # them. cu_seqlens is a device tensor held here: the varlen vision attention caches its
         # device copy of the last cu_seqlens it saw, which a later layout would free.
-        self.vis_pos = visual.fast_pos_embed_interpolate(grid)
-        rot = visual.rot_pos_emb(grid)
-        emb = torch.cat((rot, rot), dim=-1)
-        self.vis_pe = (emb.cos(), emb.sin())
+        from transformers.models.qwen3_5.modeling_qwen3_5 import (
+            get_vision_interpolation_indices_and_weights,
+            get_vision_position_ids,
+        )
+
+        grid_dev = grid.to(device)
+        with torch.no_grad():
+            idx, wts = get_vision_interpolation_indices_and_weights(
+                grid_dev,
+                num_grid_per_side=visual.num_grid_per_side,
+                mode=visual.interpolation_mode,
+                align_corners=visual.interpolation_align_corners,
+                spatial_merge_size=visual.config.spatial_merge_size,
+            )
+            self.vis_pos = (visual.pos_embed(idx) * wts[:, :, None]).sum(1).to(vwe.vlm.dtype)
+            pos_ids = get_vision_position_ids(grid_dev, visual.spatial_merge_size)
+            self.vis_pe = tuple(visual.rotary_pos_emb(self.vis_pos, pos_ids))
         self.vis_cu = F.pad(
             torch.repeat_interleave(grid[:, 1] * grid[:, 2], grid[:, 0]).cumsum(
                 dim=0, dtype=torch.int32

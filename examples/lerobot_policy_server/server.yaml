@@ -1,0 +1,52 @@
+# REKI behind `lerobot-policy-server` (LeRobot >= 0.7.0). Template: LeRobot's
+# examples/remote_inference/server.yaml. Copy the state and action names, the image keys and the
+# image shapes from `config.json` of the exported checkpoint (docs/training.md#export), and the
+# calibration conventions from your robot; the values below are an SO-101 example.
+#
+#   lerobot-policy-server --config_path=examples/lerobot_policy_server/server.yaml
+deployment: reki
+model:
+  repo_or_path: /absolute/path/to/exported/checkpoint
+  revision: null  # For Hub checkpoints, pin a commit before validating a deployment.
+  device: cuda
+execution:
+  # Chunk only: RTC stays off for REKI. A chunk would have to outlast the stride plus the inference
+  # delay, and no released checkpoint is trained for that.
+  supported_modes: [chunk]
+  # Must equal `fps` of config.json.
+  action_fps: 30.0
+  # One request per `history_stride_s`: n_action_steps = history_stride_s x fps (30 = 1 s at 30 fps).
+  # The plugin returns exactly this many actions per request, and the robot plays all of them
+  # before it asks again (client: `--inference.chunk_merge=append`; the default `aligned` asks about
+  # twice per stride). The register memory takes one frame per request.
+  n_action_steps: 30
+  action_deadline_s: 5.0
+  idle_timeout_s: 10.0  # Absent-client ownership grace, not a robot motion timeout.
+  # One warmup call: a second would be a request one stride too early, which the plugin logs.
+  # The server resets the policy after warmup.
+  warmup_calls: 1
+language:
+  enabled: false
+zenoh:
+  mode: peer
+  listen_endpoints: [tcp/127.0.0.1:7447]
+semantics: so101-degrees-gripper-percent-v1
+robot_type: so101_follower
+features:
+  - name: observation.state
+    shape: [6]
+    dtype: float32
+    names: [shoulder_pan.pos, shoulder_lift.pos, elbow_flex.pos, wrist_flex.pos, wrist_roll.pos, gripper.pos]
+    semantics: so101-degrees-gripper-percent-v1
+  # One entry per image key in `camera_map` of config.json, shape [H, W, 3] = the image shape there.
+  - name: observation.images.front
+    shape: [480, 640, 3]
+    dtype: uint8
+    kind: rgb
+    semantics: rgb-front-table-v1
+action_feature:
+  name: action
+  shape: [6]
+  dtype: float32
+  names: [shoulder_pan.pos, shoulder_lift.pos, elbow_flex.pos, wrist_flex.pos, wrist_roll.pos, gripper.pos]
+  semantics: so101-degrees-gripper-percent-v1

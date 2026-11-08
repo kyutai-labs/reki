@@ -364,5 +364,5 @@ pixi run lerobot-eval --policy.path=kyutai/reki-2b-robocasa365 --env.type=reki \
 
 `lerobot-eval` writes `eval_info.json`, not the `results.json` files of `rollout.py`.
 
-The LeRobot async server does not accept plugin policies. For a real robot, use
-[`scripts/deploy/policy_server_lerobot.py`](../README.md#real-robot-deployment).
+For a real robot, serve the plugin with `lerobot-policy-server`
+([README](../README.md#real-robot-deployment)).
