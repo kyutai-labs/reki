@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import random
 from collections import Counter
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -58,3 +59,29 @@ def test_epoch_cap_counts_grad_accumulation(monkeypatch: pytest.MonkeyPatch, ga:
     ratios = robot_sampling_ratios(cfg, names, sizes)
     assert ratios == pytest.approx(reference), "same samples per run, same mix"
     assert reference[0] < 1_000**0.5 / (1_000**0.5 + 1_000_000**0.5), "the cap binds on 'small'"
+
+
+def test_missing_vision_diversity_raises(tmp_path: Path) -> None:
+    from reki.data.robotics.sampling import compute_dataset_weights
+
+    vision = tmp_path / "vision.json"
+    vision.write_text('{"a": 10.0}')
+    with pytest.raises(ValueError, match=r"vision diversity.*\['b'\]"):
+        compute_dataset_weights(["a", "b"], [100, 100], vision_diversity_path=str(vision))
+
+
+def test_unknown_weight_override_raises() -> None:
+    from reki.data.robotics.sampling import robot_sampling_ratios
+    from reki.policy.train_config import TrainConfig
+
+    cfg = TrainConfig(steps=1, batch_size=1, weight_overrides={"robocoin_aitbot_mmk2": 0.5})
+    with pytest.raises(ValueError, match=r"weight_overrides.*\['robocoin_aitbot_mmk2'\]"):
+        robot_sampling_ratios(cfg, ["libero", "bc_z"], [100, 100])
+
+
+def test_registered_weight_override_outside_mix_is_ignored() -> None:
+    from reki.data.robotics.sampling import robot_sampling_ratios
+    from reki.policy.train_config import TrainConfig
+
+    cfg = TrainConfig(steps=1, batch_size=1, weight_overrides={"robocoin_airbot_mmk2": 0.5})
+    assert robot_sampling_ratios(cfg, ["libero", "bc_z"], [100, 100]) == pytest.approx([0.5, 0.5])

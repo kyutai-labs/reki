@@ -1,14 +1,15 @@
 """Inspect data and exercise the VLA training pipeline with detailed diagnostics.
 
 Builds the configured dataset, policy, optimizer, and scheduler, then runs forward and backward
-passes while reporting batch contents, timings, gradients, and GPU memory.
+passes while reporting batch contents, timings, gradients, validation metrics, and GPU memory.
 
 Usage:
     pixi run python scripts/dry_run.py --config=configs/sft.yaml --dataset=libero --batch_size=4
     pixi run python scripts/dry_run.py --config=configs/sft.yaml --dataset=libero --skip_model
 
 Dry-run-only knobs: ``device``, ``dtype``, ``num_batches``, ``skip_model``, ``skip_backward``,
-``debug_positions``. Everything else is a TrainConfig field.
+``debug_positions``. Everything else is a TrainConfig field; a validation pass runs when
+``val_dataset`` is set.
 """
 
 from __future__ import annotations
@@ -26,9 +27,14 @@ from lerobot.utils.constants import (
 from train import build_dataloader, build_optimizer, build_policy, configure_torch
 from transformers import AutoProcessor
 
+from reki.data.robotics.lerobot_io import training_leaves
+from reki.data.robotics.registry import spec_names, state_embodiments
+from reki.data.robotics.subtasks import DEFAULT_LOOKUP
+from reki.policy.constants import IGNORE_INDEX
 from reki.policy.modeling import RekiModel
 from reki.policy.train_config import TrainConfig
 from reki.policy.utils import to_device
+from reki.policy.val import prefetch_val_batches, val_flow_loss
 from reki.utils.cli import fire_bool
 
 
@@ -122,6 +128,9 @@ def _print_batch_diagnostics(batch: dict, cfg: TrainConfig) -> None:
         )
     print(f"  Image tokens (total): {img_tokens}")
     print(f"  State encoding:       {cfg.state_encoding}")
+    labels = batch.get("labels")
+    if labels is not None:
+        print(f"  CE-supervised tokens: {int((labels != IGNORE_INDEX).sum())}")
 
     _section("BATCH CONTENTS")
     for key in sorted(batch.keys()):
@@ -141,6 +150,10 @@ def _print_batch_diagnostics(batch: dict, cfg: TrainConfig) -> None:
         ids = packed_tokens[start:end].tolist()
         print(f"\n  Sample {i} ({len(ids)} tok):")
         print(f"    {format_sample_tokens(ids, tokenizer, _img_pad)}")
+        if labels is not None:
+            sup = [t for t in labels[start:end].tolist() if t != IGNORE_INDEX]
+            if sup:
+                print(f"    CE target: {tokenizer.decode(sup)!r}")
 
 
 def _shape(t: object) -> str:
@@ -288,6 +301,73 @@ def _print_gradient_diagnostics(policy: torch.nn.Module, cfg: TrainConfig) -> No
         print(f"\n  DDP-readiness: all {n_trainable} trainable params received gradients ✓")
 
 
+def narrow_to_dataset(
+    cfg: TrainConfig, config: str | None, overrides: dict[str, Any]
+) -> dict[str, int] | None:
+    """When ``--dataset`` narrows the mix of ``config``, switch off the parts of ``cfg`` that
+    need the rest of the mix, and print them in one line. Fields in ``overrides`` stay as
+    given. Returns the state MLPs of the mix when ``--dataset`` has no state embodiment: the
+    dataset build trims them away, and the policy must get them back to keep the mix's
+    adaln path (stateless samples take the learned null)."""
+    mix = (TrainConfig.load_yaml_kwargs(config) if config else {}).get(
+        "dataset", TrainConfig.dataset
+    )
+    names = spec_names(cfg.dataset)
+    if "dataset" not in overrides or set(names) == set(spec_names(mix)):
+        return None
+    off: list[str] = []
+    mix_state_mlps = None
+    absent = [n for n in cfg.action_pace if n not in names]
+    if absent and "action_pace" not in overrides:
+        cfg.action_pace = {n: p for n, p in cfg.action_pace.items() if n in names}
+        off.append(f"action_pace of {absent} (not in --dataset)")
+    if cfg.vl_datasets and "vl_datasets" not in overrides:
+        cfg.vl_datasets = None
+        off.append("vl_datasets (VL co-training)")
+    if cfg.val_dataset and cfg.val_dataset not in names and "val_dataset" not in overrides:
+        off.append(f"val_dataset {cfg.val_dataset} (not in --dataset)")
+        cfg.val_dataset = None
+    if cfg.max_epochs_per_dataset and "max_epochs_per_dataset" not in overrides:
+        cfg.max_epochs_per_dataset = 0
+        off.append("max_epochs_per_dataset (its 10% check is for the full mix)")
+    if (
+        cfg.state_encoding == "adaln"
+        and not state_embodiments(names)
+        and "state_encoding" not in overrides
+    ):
+        mix_embs = state_embodiments(spec_names(mix))
+        mix_state_mlps = {k: v for k, v in cfg.state_mlp_embodiments.items() if k in mix_embs}
+        if not mix_state_mlps:
+            cfg.state_encoding = "none"
+            off.append("state_encoding adaln (no state in --dataset or its mix)")
+    if cfg.predict_subtask and "predict_subtask" not in overrides:
+        lookups = {
+            f
+            for _, leaf in training_leaves(names)
+            for f in (cfg.subtask_lookup_filename, DEFAULT_LOOKUP)
+            if (leaf / "meta" / f).exists()
+        }
+        if not lookups:
+            cfg.predict_subtask = False
+            off.append("predict_subtask (no subtask lookup)")
+        elif (
+            cfg.subtask_lookup_filename not in lookups
+            and "subtask_lookup_filename" not in overrides
+        ):
+            off.append(
+                f"subtask_lookup_filename {cfg.subtask_lookup_filename} (absent; {DEFAULT_LOOKUP} instead)"
+            )
+            cfg.subtask_lookup_filename = DEFAULT_LOOKUP
+    if off:
+        print(f"dry_run --dataset={cfg.dataset}: switched off " + "; ".join(off))
+    if mix_state_mlps:
+        print(
+            f"dry_run --dataset={cfg.dataset}: no state embodiment, keeps adaln with the "
+            f"mix's state MLPs {sorted(mix_state_mlps)}"
+        )
+    return mix_state_mlps or None
+
+
 def _optimizer_step(
     policy: torch.nn.Module, optimizer: Any, lr_scheduler: Any, grad_clip: float
 ) -> float | None:
@@ -318,7 +398,7 @@ def dry_run(
         device: where the model and batches live.
         dtype: model weight dtype; the forward autocasts to it.
         num_batches: batches to fetch; diagnostics print for the first, later ones train.
-        skip_backward: forward only.
+        skip_backward: forward only (validation pass still runs when ``val_dataset`` is set).
         skip_model: skip model loading entirely (only inspect data).
         debug_positions: print the MRoPE position layout after the first forward.
     """
@@ -326,11 +406,14 @@ def dry_run(
     skip_model = fire_bool("skip_model", skip_model)
     debug_positions = fire_bool("debug_positions", debug_positions)
     cfg = TrainConfig.from_config_and_overrides(config, overrides)
+    mix_state_mlps = narrow_to_dataset(cfg, config, overrides)
     configure_torch(cfg.seed)
     cfg.print()
 
     _section("LOADING DATASET")
-    ds, _, loader = build_dataloader(cfg)
+    ds, loader = build_dataloader(cfg)
+    if mix_state_mlps:
+        cfg.state_mlp_embodiments = mix_state_mlps
     print(f"Dataset length: {len(ds):,}")
 
     _section("FETCHING BATCH")
@@ -399,8 +482,17 @@ def dry_run(
         else:
             print(f"  {k}: {v}")
 
+    def _validation_pass() -> None:
+        if not cfg.val_dataset:
+            return
+        _section(f"VALIDATION PASS ({cfg.val_dataset}, {cfg.val_batches} batches)")
+        batches = prefetch_val_batches(cfg)
+        fl = val_flow_loss(policy, batches, device=torch_device, seed=cfg.val_seed)
+        print(f"  val/{cfg.val_dataset}/flow_loss = {fl.item():.5f}")
+
     if skip_backward:
         print(f"\n  Forward: {fwd_ms:.1f} ms")
+        _validation_pass()
         _section("DRY RUN COMPLETE (backward skipped)")
         return
 
@@ -414,10 +506,14 @@ def dry_run(
         f"\n  Forward: {fwd_ms:.1f} ms, Backward: {bwd_ms:.1f} ms, Total: {fwd_ms + bwd_ms:.1f} ms"
     )
     _print_gradient_diagnostics(policy, cfg)
+    _validation_pass()
+
     if num_batches > 1:
         _section(f"FURTHER BATCHES ({num_batches - 1} × fwd+bwd+step)")
         grad_norm = _optimizer_step(policy, optimizer, lr_scheduler, cfg.grad_clip)
         print(f"  batch  0: grad_norm={'-' if grad_norm is None else f'{grad_norm:.3f}'}")
+        # Validation leaves the policy in eval mode, which also disables gradient checkpointing.
+        policy.train()
         for i in range(1, num_batches):
             batch = to_device(next(batch_iter), torch_device)
             _sync()

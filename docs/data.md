@@ -1,62 +1,10 @@
 # Data
 
-All robot data uses the LeRobot v3.0 format.
-[`reki/data/robotics/registry.py`](../reki/data/robotics/registry.py) defines each dataset (one
-`DatasetSpec`) and the dataset groups, and
-[`reki/data/robotics/sampling.py`](../reki/data/robotics/sampling.py) sets the mixture weights.
+All robot data uses the LeRobot v3.0 format. Each dataset is one `DatasetSpec` in
+[`reki/data/robotics/registry.py`](../reki/data/robotics/registry.py), with the dataset groups.
+The mixture weights are in [`reki/data/robotics/sampling.py`](../reki/data/robotics/sampling.py)
+([pretraining mixture](pretraining_data.md#pretraining-mixture)).
 [Benchmark datasets](#benchmark-datasets) gives the steps to build the benchmark datasets.
-
-## Pretraining mixture
-
-[`kyutai/reki-2b`](https://huggingface.co/kyutai/reki-2b) was pretrained on this mixture
-(recipe: [`configs/cpt.yaml`](../configs/cpt.yaml)). It holds 1.0B frames: real-robot
-teleoperation (639.8M frames), simulation (193.9M) and egocentric human video (170.9M), plus
-12.2M vision-language rows. Training samples them with probability 51.0%, 10.3%, 28.8% and
-10.0%.
-
-| Group | Robots | Frames | Sampling probability |
-|---|---|---|---|
-| Open X-Embodiment | Google Robot, Franka | 14.7M | 4.3% |
-| BridgeData V2 | WidowX | 1.8M | 1.4% |
-| DROID 1.0.1 | Franka | 18.4M | 4.9% |
-| AgiBot World 2026 | AgiBot G2A | 17.4M | 4.1% |
-| Galaxea Open-World | Galaxea R1 Lite | 18.8M | 6.0% |
-| RoboMIND 1.2 | Franka, dual FR3, UR5e, AgileX, TienKung | 21.3M | 5.7% |
-| rdt-ft-data | ALOHA-style bimanual | 3.2M | 2.1% |
-| RoboCOIN | AgileX, R1 Lite, AIRBOT MMK2, Unitree G1, RealMan, Galbot, AgiBot A2D, Leju Kuavo, AI2 AlphaBot 2 | 100.9M | 10.2% |
-| ABC-130K | YAM bimanual | 442.6M | 11.8% |
-| RoboSet-Teleoperation, Berkeley RPT | Franka | 0.8M | 0.6% |
-| GR00T X-Embodiment Sim | GR-1 humanoid, bimanual Panda | 12.5M | 1.8% |
-| InternData-A1 | Franka, ALOHA, Genie-1 | 181.4M | 8.5% |
-| EgoDex, EgoVerse, Xperience-10M | human hands | 170.9M | 28.8% |
-| FineVision, LLaVA-OneVision-1.5, RoboPoint, RefSpatial, PixMo-Points | — | 12.2M rows | 10.0% |
-
-### Sources
-
-| Dataset | Source | Part used |
-|---|---|---|
-| Open X-Embodiment | [LeRobot exports](https://huggingface.co/IPEC-COMMUNITY) on HF, or `gs://gresearch/robotics` | 12 sets: `taco_play`, `stanford_hydra`, `nyu_franka_play`, `bc_z`, `fractal` (RT-1), `furniture_bench`, `austin_sailor`, `austin_buds`, `utaustin_mutex`, `berkeley_cable_routing`, `viola`, `berkeley_rpt` |
-| BridgeData V2 | Open X-Embodiment `bridge` | teleoperated demos (`demos_8_17`); the scripted demos are not used |
-| DROID 1.0.1 | HF `lerobot/droid_1.0.1` | episodes with data and videos in the LeRobot release |
-| AgiBot World 2026 | HF `agibot-world/AgiBotWorld2026` | `ImitationLearning/`, April 2026 snapshot (21,650 episodes, G2A robot) |
-| Galaxea Open-World Dataset | HF `OpenGalaxea/Galaxea-Open-World-Dataset` | all |
-| RoboMIND 1.2 | HF `x-humanoid-robomind/RoboMIND` (benchmark 1.0, 1.1 and 1.2 folders) | real-robot demos of all 8 setups (no simulation, no `failure_data/`): `franka_1rgb`, `franka_3rgb`, `franka_fr3_dual`, `ur_1rgb`, `agilex_3rgb`, `tienkung_gello_1rgb`, `tienkung_prod1_gello_1rgb`, `tienkung_xsens_1rgb` |
-| rdt-ft-data | HF `robotics-diffusion-transformer/rdt-ft-data` | all (303 tasks) |
-| RoboCOIN | HF `RoboCOIN/*` (one gated repo per task) | 14 robot collections, 673 task repos (June 2026 snapshot); 19 R1 Lite collections excluded for a broken state format |
-| ABC-130K | ABC-130K release | train split (129,245 episodes) |
-| RoboSet-Teleoperation | HF `jdvakil/RoboSet-Teleoperation` | all, delta end-effector actions |
-| GR00T X-Embodiment Sim | HF `nvidia/PhysicalAI-Robotics-GR00T-X-Embodiment-Sim` | 11 tasks: `gr1_arms_only.CanSort`; `gr1_arms_waist.{CanToDrawer, CupToDrawer, CuttingboardToBasket, CuttingboardToCardboardBox}`; `bimanual_panda_gripper.{Threading, ThreePieceAssembly, Transport}`; `bimanual_panda_hand.{BoxCleanup, DrawerCleanup, LiftTray}` |
-| InternData-A1 | HF `InternRobotics/InternData-A1` at commit `6904fb6464` | simulation: the articulation, basic and long-horizon tasks of `franka` (28 tasks), `split_aloha` (87) and `genie1` (8); no pick-and-place tasks; `lift2` not used. Curation removes almost all episodes of 3 `franka` tasks (`sort_bowls_and_cups`, `manipulate_the_microwave`, `sweep_the_trash`) |
-| EgoDex | Apple EgoDex release | train split (part1–5 and extra) |
-| EgoVerse | EgoVerse release | Aria recordings |
-| Xperience-10M | HF `ropedia-ai/xperience-10m` | episodes with camera poses |
-| FineVision | HF `HuggingFaceM4/FineVision` | manually selected subset of 51 configs (`finevision_for_robotics`) |
-| LLaVA-OneVision-1.5 | HF `mvp-lab/LLaVA-OneVision-1.5-Instruct-Data` | 9 configs (1.29M rows) |
-| RoboPoint | HF `wentao-yuan/robopoint-data` | object and free-space pointing (556k rows) |
-| RefSpatial | HF `JingkunAn/RefSpatial` | the 7 2D and 3D QA sets (2.34M rows); the Simulator part is not used |
-| PixMo-Points | HF `allenai/pixmo-points` | all images still online (1.66M rows) |
-
-`scripts/data/download.py` fetches the raw inputs of the [benchmark datasets](#benchmark-datasets).
 
 ## State formats
 
@@ -118,8 +66,8 @@ The first 14 keys have a trained state MLP in `kyutai/reki-2b`. Finetuning adds
 
 The robot identity reaches the model in a structured prompt, one `field: value` per line:
 `embodiment`, `instruction`, `speed`, `fps`, `control mode`. `speed` is the episode length in 100-frame bins. Evaluation leaves it out
-(`rollout.py --speed_bin N` sets it). The `embodiment` line comes from the `robot_type` of
-`meta/info.json`, or from `DatasetSpec.robot_type` when it is set.
+(`rollout.py --speed_bin N` sets it). The `embodiment` line is the dataset's
+`DatasetSpec.robot_type`.
 
 ### Chunk size
 
@@ -181,6 +129,8 @@ These steps build the finetuning datasets of the benchmarks under `$REKI_DATASET
 the paths the loader expects. LIBERO-Plus reuses the LIBERO finetune and needs no data. Run the
 commands from the repository root with `pixi run python …`.
 
+`scripts/data/download.py` fetches the raw inputs of the benchmark datasets.
+
 | Dataset | Steps |
 |---|---|
 | `libero` | `scripts/data/download.py libero` (already v3.0), then `scripts/data/recompute_euler_stats.py --datasets libero` |
@@ -203,6 +153,7 @@ Use these steps to add your own robot data.
 4. **Register.** Add one `DatasetSpec` to `DATASETS` in
    [`reki/data/robotics/registry.py`](../reki/data/robotics/registry.py):
    - `family`, the source grouped in the sampling-mix printout;
+   - `robot_type`, the robot name in the prompt;
    - `control_mode` ([Control modes and prompt](#control-modes-and-prompt)) and `cameras`
      (raw key → `camera_top` / `camera_wrist_left` / `camera_wrist_right` / `camera_side_N`);
    - `embodiment`, with its dim in `state_mlp_embodiments` of your run;
@@ -210,9 +161,13 @@ Use these steps to add your own robot data.
    - `gripper_flip_state` / `gripper_flip_action` (indices after the slice) if high means closed;
    - `action_rot_rep` / `state_rot_rep` for axis-angle rotations, then
      `scripts/data/recompute_euler_stats.py --datasets <name>`;
+   - `subtask_lookup=True` if the leaves have a subtask lookup (checked with `predict_subtask`);
    - `root` for one repo, or `collection` for one repo per task; a group of datasets goes in
      `DATASET_GROUPS`.
-5. **Check.**
+5. **Validation split (optional).** `scripts/data/make_val_split.py --dataset <name>
+   --per_task N` writes evenly spaced episodes to `meta/dropped_episodes.json` (the file means
+   "not trained on"). Pin the same episode ids in `VAL_DATASETS`.
+6. **Check.**
    - `scripts/data/check_datasets.py` on your data: group conventions, centered delta actions,
      per-step rotation below π, raw layout vs registry, and gripper polarity.
    - `scripts/dry_run.py --config=configs/sft.yaml --dataset=<name>`.

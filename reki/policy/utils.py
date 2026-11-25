@@ -1,4 +1,4 @@
-"""Small helpers shared by training and evaluation."""
+"""Small helpers shared by training, validation and evaluation."""
 
 from __future__ import annotations
 

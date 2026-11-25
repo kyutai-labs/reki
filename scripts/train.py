@@ -14,6 +14,7 @@ Resume from checkpoint:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -21,7 +22,6 @@ import random
 import subprocess
 import time
 import warnings
-from collections.abc import Callable
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -30,8 +30,9 @@ import fire
 import torch
 from accelerate import Accelerator
 from accelerate.utils import DistributedDataParallelKwargs, GradientAccumulationPlugin, set_seed
+from torch.distributed.optim import ZeroRedundancyOptimizer
 from torch.optim.lr_scheduler import LambdaLR
-from torch.utils.data import DataLoader
+from torch.utils.data import ConcatDataset, DataLoader
 from transformers import get_cosine_with_min_lr_schedule_with_warmup, get_wsd_schedule
 
 from reki.data.robotics.collate import combined_collate
@@ -45,11 +46,14 @@ from reki.policy.external.base import ExternalPolicy
 from reki.policy.modeling import RekiModel
 from reki.policy.optim import EMAModel, StochasticRoundingAdamW, build_optimizer_groups
 from reki.policy.train_config import TrainConfig
+from reki.policy.val import prefetch_val_batches, val_flow_loss
 from reki.utils.cli import fire_bool
 from reki.utils.dist_utils import is_rank_zero
 
 warnings.filterwarnings("ignore", "Cannot enable progress bars", UserWarning, "datasets")
 torch.multiprocessing.set_sharing_strategy("file_system")
+
+ZERO1_OPTIMIZER = "zero1_optimizer.pt"
 
 
 def build_accelerator(cfg: TrainConfig) -> Accelerator:
@@ -77,10 +81,8 @@ def configure_torch(seed: int) -> None:
     torch.backends.cuda.matmul.allow_tf32 = True
 
 
-def build_dataloader(
-    cfg: TrainConfig,
-) -> tuple[CombinedLeRobotDataset, Callable[[list[dict]], dict], DataLoader]:
-    """Build the training dataset, collator, and data loader."""
+def build_dataloader(cfg: TrainConfig) -> tuple[CombinedLeRobotDataset | ConcatDataset, DataLoader]:
+    """Build the training dataset and data loader."""
     # The builders check the rank without an Accelerator, so dry_run.py can call them.
     if is_rank_zero():
         print("Loading dataset")
@@ -104,12 +106,12 @@ def build_dataloader(
         drop_last=True,
         pin_memory=True,
     )
-    return ds, collate_fn, dataloader
+    return ds, dataloader
 
 
 def build_policy(
     cfg: TrainConfig,
-    ds: CombinedLeRobotDataset,
+    ds: CombinedLeRobotDataset | ConcatDataset,
     device: str = "cuda",
     dtype: str = "bfloat16",
 ) -> RekiModel | ExternalPolicy:
@@ -119,6 +121,7 @@ def build_policy(
         print("Building model")
     if cfg.external_policy is not None:
         adapter = get_external_policy(cfg.external_policy)
+        assert isinstance(ds, CombinedLeRobotDataset)  # external policies train without VL
         policy = adapter.build(cfg, ds.external_policy_stats(), ds.external_chunk_size())
         policy.freeze_vision_blocks(cfg.train_vision_blocks)
         if cfg.gradient_checkpointing:
@@ -137,9 +140,13 @@ def build_policy(
 
 
 def build_optimizer(
-    cfg: TrainConfig, policy: RekiModel | ExternalPolicy
-) -> tuple[StochasticRoundingAdamW, LambdaLR]:
-    """Build the optimizer parameter groups and learning-rate scheduler."""
+    cfg: TrainConfig, policy: RekiModel | ExternalPolicy, zero1: bool = False
+) -> tuple[torch.optim.Optimizer, LambdaLR]:
+    """Build the optimizer parameter groups and learning-rate scheduler.
+
+    ``zero1`` shards the optimizer state over the ranks (ZeroRedundancyOptimizer). Its flat
+    buckets need one dtype, so the fp32 params are cast to bf16.
+    """
     if isinstance(policy, ExternalPolicy):
         param_groups = policy.param_groups(
             lr=cfg.lr, weight_decay=cfg.weight_decay, backbone_lr_scale=cfg.backbone_lr_scale
@@ -159,9 +166,27 @@ def build_optimizer(
     if is_rank_zero():
         for name, count in group_info.items():
             print(f"  Optimizer group [{name}]: {count:,} params")
-    optimizer = StochasticRoundingAdamW(
-        param_groups, betas=(0.9, 0.95), master_weights=cfg.optimizer_master_weights
-    )
+    if zero1:
+        if cfg.gradient_accumulation_steps != 1:
+            raise ValueError("use_zero1 requires gradient_accumulation_steps == 1")
+        fp32_cast = 0
+        for group in param_groups:
+            for p in group["params"]:
+                if p.dtype == torch.float32:
+                    p.data = p.data.bfloat16()
+                    fp32_cast += 1
+        optimizer = ZeroRedundancyOptimizer(
+            param_groups,
+            optimizer_class=StochasticRoundingAdamW,
+            betas=(0.9, 0.95),
+            master_weights=cfg.optimizer_master_weights,
+        )
+        if is_rank_zero():
+            print(f"  ZeRO-1 optimizer ({fp32_cast} fp32 params cast to bf16)")
+    else:
+        optimizer = StochasticRoundingAdamW(
+            param_groups, betas=(0.9, 0.95), master_weights=cfg.optimizer_master_weights
+        )
     if cfg.lr_schedule == "cosine":
         lr_scheduler = get_cosine_with_min_lr_schedule_with_warmup(
             optimizer,
@@ -202,7 +227,9 @@ def _micro_step(
         if accelerator.sync_gradients and grad_clip > 0:
             grad_norm = accelerator.clip_grad_norm_(policy.parameters(), grad_clip)
         optimizer.step()
-        optimizer.zero_grad()
+        # Zeroed in place with accumulation: freed grads would make each no_sync backward allocate a
+        # second copy next to the DDP buckets.
+        optimizer.zero_grad(set_to_none=accelerator.gradient_accumulation_steps == 1)
     return loss, loss_dict, grad_norm
 
 
@@ -259,10 +286,13 @@ def _batch_token_counts(batch: dict[str, Any], external: bool) -> dict[str, int]
 
 
 class MetricLogger:
-    """Train metrics to stdout and ``<output_dir>/metrics.jsonl`` (main rank).
+    """Train and val metrics to stdout and ``<output_dir>/metrics.jsonl`` (main rank).
 
     The train loss is the mean over all ranks of the micro-batch losses since the last log.
+    Each of ``SUB_LOSSES`` is the mean over the micro-batches that have it.
     """
+
+    SUB_LOSSES = ("flow_loss", "ce_loss", "subtask_loss", "text_loss")
 
     def __init__(self, cfg: TrainConfig, accelerator: Accelerator) -> None:
         self.accelerator = accelerator
@@ -270,13 +300,19 @@ class MetricLogger:
         self.jsonl_path = os.path.join(cfg.output_dir, "metrics.jsonl")
         self.loss_sum = torch.zeros((), device=accelerator.device)
         self.n_micro = 0
+        self.sub_sum = torch.zeros(len(self.SUB_LOSSES), device=accelerator.device)
+        self.sub_count = torch.zeros(len(self.SUB_LOSSES), device=accelerator.device)
         self.step_s: list[float] = []
         self.data_s: list[float] = []
         self.windows: list[float] = []
 
-    def add_micro_batch(self, loss: torch.Tensor) -> None:
+    def add_micro_batch(self, loss: torch.Tensor, loss_dict: dict[str, Any]) -> None:
         self.loss_sum += loss.detach()
         self.n_micro += 1
+        for i, key in enumerate(self.SUB_LOSSES):
+            if key in loss_dict:
+                self.sub_sum[i] += loss_dict[key]
+                self.sub_count[i] += 1
 
     def add_step(self, step_s: float, data_s: float, windows: float) -> None:
         self.step_s.append(step_s)
@@ -294,11 +330,15 @@ class MetricLogger:
             [
                 self.loss_sum.view(1),
                 torch.tensor([float(self.n_micro)], device=self.accelerator.device),
+                self.sub_sum,
+                self.sub_count,
             ]
         )
         loss_reduced = self.accelerator.gather(loss_pack.unsqueeze(0)).sum(0)
         self.loss_sum.zero_()
         self.n_micro = 0
+        self.sub_sum.zero_()
+        self.sub_count.zero_()
         if not self.accelerator.is_main_process:
             self.step_s.clear()
             self.data_s.clear()
@@ -314,6 +354,11 @@ class MetricLogger:
             "step_s": round(sum(self.step_s) / n, 2),
             "data_s": round(sum(self.data_s) / n, 2),
         }
+        n_sub = len(self.SUB_LOSSES)
+        sub_sum, sub_count = loss_reduced[2 : 2 + n_sub], loss_reduced[2 + n_sub :]
+        for key, total, count in zip(self.SUB_LOSSES, sub_sum.tolist(), sub_count.tolist()):
+            if count > 0:
+                metrics[key] = round(total / count, 5)
         if grad_norm is not None:
             gn = grad_norm.item() if isinstance(grad_norm, torch.Tensor) else grad_norm
             metrics["grad_norm"] = round(gn, 3)
@@ -341,6 +386,34 @@ class MetricLogger:
             f.write("\n")
 
 
+def _validate(
+    cfg: TrainConfig,
+    accelerator: Accelerator,
+    policy: torch.nn.Module,
+    val_batches: Any,
+    emas: dict[str, EMAModel],
+) -> dict[str, Any]:
+    """Evaluate live or EMA policy variants and return their validation metrics."""
+    variants = [(f"_{stem}", ema) for stem, ema in emas.items()] if emas else [("", None)]
+    metrics: dict[str, Any] = {}
+    for suffix, ema in variants:
+        ctx = (
+            ema.applied(accelerator.unwrap_model(policy))
+            if ema is not None
+            else contextlib.nullcontext()
+        )
+        with ctx:
+            flow_loss = val_flow_loss(
+                policy,
+                val_batches,
+                accelerator.device,
+                seed=cfg.val_seed,
+                accelerator=accelerator,
+            )
+        metrics[f"val/{cfg.val_dataset}/flow_loss{suffix}"] = round(flow_loss.item(), 5)
+    return metrics
+
+
 def _find_latest_checkpoint(output_dir: str) -> str | None:
     """Find the latest checkpoint-N directory in output_dir."""
     ckpt_dirs = sorted(
@@ -360,20 +433,29 @@ def _prune_stale_optimizer_state(
     decay length can resume from it.
     """
     keep_dir = Path(output_dir) / f"checkpoint-{keep_step}"
-    if not any(keep_dir.glob("optimizer*.bin")):
+    if not any(keep_dir.glob("optimizer*.bin")) and not (keep_dir / ZERO1_OPTIMIZER).exists():
         raise RuntimeError(f"refusing to prune: no optimizer state written in {keep_dir}")
     for ckpt in Path(output_dir).glob("checkpoint-*"):
         ckpt_step = int(ckpt.name.split("-")[1])
         if ckpt_step >= keep_step or ckpt_step == also_keep:
             continue
-        for stale in ckpt.glob("optimizer*.bin"):
+        for stale in (*ckpt.glob("optimizer*.bin"), *ckpt.glob(ZERO1_OPTIMIZER)):
             stale.unlink()
             print(f"Pruned stale optimizer state {stale}")
+
+
+def _consolidate_zero1(cfg: TrainConfig, optimizer: torch.optim.Optimizer) -> None:
+    """Gather the ZeRO-1 optimizer shards on rank 0 (a collective: every rank calls it before a
+    save). No-op for other optimizers and without ``save_optimizer_state``."""
+    if cfg.save_optimizer_state and isinstance(optimizer, ZeroRedundancyOptimizer):
+        torch.cuda.empty_cache()
+        optimizer.consolidate_state_dict(to=0)
 
 
 def _save_checkpoint(
     accelerator: Accelerator,
     policy: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
     step: int,
     epoch: int,
     cfg: TrainConfig,
@@ -381,12 +463,18 @@ def _save_checkpoint(
 ) -> None:
     """Save model weights, optimizer, scheduler, and training state.
 
-    Each entry in ``emas`` is saved as ``<stem>.safetensors`` next to the checkpoint.
+    Accelerate does not manage the ZeRO-1 optimizer: its consolidated state goes to
+    ``ZERO1_OPTIMIZER``. Each entry in ``emas`` is saved as ``<stem>.safetensors`` next to the
+    checkpoint.
     """
     save_dir = os.path.join(cfg.output_dir, f"checkpoint-{step}")
     torch.cuda.empty_cache()
     if cfg.save_optimizer_state:
         accelerator.save_state(save_dir)
+        if isinstance(optimizer, ZeroRedundancyOptimizer):
+            zero1_path = os.path.join(save_dir, ZERO1_OPTIMIZER)
+            torch.save(optimizer.state_dict(), zero1_path + ".tmp")
+            os.replace(zero1_path + ".tmp", zero1_path)
     unwrapped = accelerator.unwrap_model(policy)
     unwrapped.save_pretrained(save_dir)
     if emas and accelerator.is_main_process:
@@ -410,17 +498,30 @@ def _save_checkpoint(
 def _load_checkpoint(
     accelerator: Accelerator,
     policy: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
     emas: dict[str, EMAModel],
     ckpt_dir: str,
 ) -> tuple[int, int]:
     """Load a checkpoint and return ``(step, epoch)``.
 
-    Checkpoints without optimizer state (save_optimizer_state=False, or pruned by
-    _prune_stale_optimizer_state) warm-start from the model weights only.
+    ZeRO-1 checkpoints: ``load_state`` restores model, scheduler and RNG, then every rank loads
+    the full optimizer state and keeps its shard. An optimizer state of the other format (ZeRO-1
+    or plain) raises. Checkpoints without optimizer state
+    (save_optimizer_state=False, or pruned by _prune_stale_optimizer_state) warm-start from the
+    model weights only.
     """
-    has_optim = any(Path(ckpt_dir).glob("optimizer*.bin"))
-    if has_optim:
+    zero1_path = os.path.join(ckpt_dir, ZERO1_OPTIMIZER)
+    saved_zero1 = os.path.exists(zero1_path)
+    if saved_zero1 or any(Path(ckpt_dir).glob("optimizer*.bin")):
+        # Accelerate skips an optimizer it does not manage: a mismatch would restart Adam.
+        if saved_zero1 != isinstance(optimizer, ZeroRedundancyOptimizer):
+            raise ValueError(
+                f"{ckpt_dir} holds {'ZeRO-1' if saved_zero1 else 'plain'} optimizer state; "
+                f"resume with use_zero1={saved_zero1}"
+            )
         accelerator.load_state(ckpt_dir)
+        if saved_zero1:
+            optimizer.load_state_dict(torch.load(zero1_path, map_location="cpu", mmap=True))
     else:
         load_pretrained_weights(accelerator.unwrap_model(policy), ckpt_dir)
         if accelerator.is_main_process:
@@ -440,6 +541,7 @@ def _resume(
     cfg: TrainConfig,
     accelerator: Accelerator,
     policy: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
     emas: dict[str, EMAModel],
 ) -> tuple[int, int]:
     """Resume from the latest checkpoint or return the initial training position."""
@@ -448,7 +550,7 @@ def _resume(
         if accelerator.is_main_process:
             print("No checkpoint found, starting from scratch")
         return 0, 0
-    step, epoch = _load_checkpoint(accelerator, policy, emas, ckpt_dir)
+    step, epoch = _load_checkpoint(accelerator, policy, optimizer, emas, ckpt_dir)
     if accelerator.is_main_process:
         print(f"Resumed from {ckpt_dir} at step {step}, epoch {epoch}")
     # RatioSampler draws from Python's global random state in the main process.
@@ -468,7 +570,7 @@ def train(config: str | None = None, resume: bool = False, **kwargs: Any):
         os.makedirs(cfg.output_dir, exist_ok=True)
         cfg.save_yaml(os.path.join(cfg.output_dir, "train_config.yaml"))
         cfg.print()
-    ds, _, dataloader = build_dataloader(cfg)
+    ds, dataloader = build_dataloader(cfg)
     if accelerator.is_main_process:
         effective_batch_size = (
             cfg.batch_size * accelerator.num_processes * cfg.gradient_accumulation_steps
@@ -478,17 +580,23 @@ def train(config: str | None = None, resume: bool = False, **kwargs: Any):
         print(f"Effective batch size: {effective_batch_size:,}")
         print(f"Epochs: ({cfg.steps:,} × {effective_batch_size}) / {len(ds):,} = {epochs:.2f}")
     policy = build_policy(cfg, ds)
-    optimizer, lr_scheduler = build_optimizer(cfg, policy)
-    policy, optimizer, dataloader, lr_scheduler = accelerator.prepare(
-        policy, optimizer, dataloader, lr_scheduler
-    )
+    if cfg.use_zero1 and accelerator.num_processes == 1:
+        raise ValueError("use_zero1 shards the optimizer over ranks: set it False on 1 process")
+    optimizer, lr_scheduler = build_optimizer(cfg, policy, zero1=cfg.use_zero1)
+    if cfg.use_zero1:
+        policy, dataloader, lr_scheduler = accelerator.prepare(policy, dataloader, lr_scheduler)
+    else:
+        policy, optimizer, dataloader, lr_scheduler = accelerator.prepare(
+            policy, optimizer, dataloader, lr_scheduler
+        )
     emas: dict[str, EMAModel] = {}
     if cfg.ema_decay and cfg.ema_decay > 0:
         if accelerator.is_main_process:
             print(f"  EMA enabled (decay={cfg.ema_decay})")
         emas = {"ema": EMAModel(accelerator.unwrap_model(policy), decay=cfg.ema_decay)}
-    step, epoch = _resume(cfg, accelerator, policy, emas) if resume else (0, 0)
+    step, epoch = _resume(cfg, accelerator, policy, optimizer, emas) if resume else (0, 0)
     log = MetricLogger(cfg, accelerator)
+    val_batches = prefetch_val_batches(cfg, accelerator) if cfg.val_dataset else None
     if accelerator.is_main_process:
         log.log({"step": step, "git_commit": _git_commit()})
     vwe = (
@@ -498,7 +606,6 @@ def train(config: str | None = None, resume: bool = False, **kwargs: Any):
     )
     if accelerator.is_main_process:
         print("Starting training")
-    policy.train()
 
     step_s = data_s = 0.0
     windows = 0
@@ -517,8 +624,11 @@ def train(config: str | None = None, resume: bool = False, **kwargs: Any):
                 windows += torch.bincount(batch["group_index"]).shape[0]
             if vwe is not None:
                 vwe.collect_gate_stats = (step + 1) % cfg.logging_steps == 0
-            loss, _, grad_norm = _micro_step(accelerator, policy, optimizer, batch, cfg.grad_clip)
-            log.add_micro_batch(loss)
+            policy.train()  # Validation leaves the policy in eval mode.
+            loss, loss_dict, grad_norm = _micro_step(
+                accelerator, policy, optimizer, batch, cfg.grad_clip
+            )
+            log.add_micro_batch(loss, loss_dict)
             if accelerator.sync_gradients:
                 _finish_optimizer_step(accelerator, policy, lr_scheduler, emas, step)
             if torch.cuda.is_available():
@@ -534,16 +644,25 @@ def train(config: str | None = None, resume: bool = False, **kwargs: Any):
             if step % cfg.logging_steps == 0:
                 gate_stats = vwe.gate_stats if vwe is not None else {}
                 log.log_train(step, optimizer.param_groups[0]["lr"], grad_norm, batch, gate_stats)
+            if val_batches is not None and step % cfg.val_freq == 0:
+                accelerator.wait_for_everyone()
+                log.log({"step": step, **_validate(cfg, accelerator, policy, val_batches, emas)})
             if step % cfg.save_steps == 0:
+                _consolidate_zero1(cfg, optimizer)
                 accelerator.wait_for_everyone()
                 if accelerator.is_main_process:
-                    _save_checkpoint(accelerator, policy, step, epoch, cfg, emas)
+                    _save_checkpoint(accelerator, policy, optimizer, step, epoch, cfg, emas)
             t_fetch = time.perf_counter()
         epoch += 1
-    accelerator.wait_for_everyone()
+    if step % cfg.save_steps != 0:
+        _consolidate_zero1(cfg, optimizer)
+        accelerator.wait_for_everyone()
+        if accelerator.is_main_process:
+            _save_checkpoint(accelerator, policy, optimizer, step, epoch, cfg, emas)
     if accelerator.is_main_process:
-        _save_checkpoint(accelerator, policy, step, epoch, cfg, emas)
         print("Training complete.")
+    accelerator.wait_for_everyone()
+    accelerator.end_training()
 
 
 if __name__ == "__main__":

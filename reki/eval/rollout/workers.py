@@ -98,10 +98,16 @@ DEFAULT_COMPILE_CACHE_DIR = Path.home() / ".cache" / "reki" / "inductor"
 def set_compile_cache_dir(path: str | None) -> Path:
     """Set the Inductor compile cache to ``path``, else ``$TORCHINDUCTOR_CACHE_DIR``, else
     ``DEFAULT_COMPILE_CACHE_DIR``, and return it. Every process of the eval and later evals use
-    it. The Inductor default is under /tmp, which is local to the node and can be wiped."""
-    cache = Path(
-        path or os.environ.get("TORCHINDUCTOR_CACHE_DIR") or DEFAULT_COMPILE_CACHE_DIR
-    ).resolve()
+    it. The Inductor default is under /tmp, which is local to the node and can be wiped, so a
+    ``$TORCHINDUCTOR_CACHE_DIR`` equal to it counts as unset (pass ``path`` to use it)."""
+    from torch._inductor.runtime import cache_dir_utils
+
+    env = os.environ.get("TORCHINDUCTOR_CACHE_DIR")
+    # torch >= 2.9 sets the variable to its default when torch._dynamo is imported (here through
+    # transformers and torchvision), before this runs.
+    if env == cache_dir_utils.default_cache_dir():  # pyright: ignore[reportPrivateImportUsage]
+        env = None
+    cache = Path(path or env or DEFAULT_COMPILE_CACHE_DIR).resolve()
     cache.mkdir(parents=True, exist_ok=True)
     os.environ["TORCHINDUCTOR_CACHE_DIR"] = str(cache)
     # One Triton cache per eval: evals on one node that unpack the same kernel from the

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict, TypeVar
 from typing import cast as type_cast
@@ -13,15 +14,19 @@ import safetensors.torch
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.utils.checkpoint
 
 from reki.vlm.qwen3_5 import check_model_id
 
 from .configuration import RekiConfig
 from .constants import (
     ACTION,
+    ACTION_DIM_VALID,
     ACTION_IS_PAD,
+    IGNORE_INDEX,
     OBS_LANGUAGE_TOKENS,
     OBS_STATE,
+    RegionTag,
 )
 from .flow_utils import create_sinusoidal_pos_embedding, sample_beta
 
@@ -38,6 +43,41 @@ def _proj_fp32(module: nn.Module, x: torch.Tensor) -> torch.Tensor:
     assert isinstance(module, nn.Linear), f"_proj_fp32 expects nn.Linear, got {type(module)}"
     bias = None if module.bias is None else module.bias.float()
     return F.linear(x.float(), module.weight.float(), bias)
+
+
+def packed_shifted_ce(
+    hidden: torch.Tensor,
+    labels: torch.Tensor,
+    seq_lens: torch.Tensor,
+    lm_head: nn.Module,
+    checkpoint: bool,
+    chunk: int = 512,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Next-token CE over a packed stream: ``(ce_per_token [L-1], shift_labels [L-1])``.
+
+    The last token of a sample does not predict the first token of the next sample (its label
+    is IGNORE_INDEX). The logits are computed ``chunk`` rows at a time and, with
+    ``checkpoint``, recomputed in the backward: the peak memory is chunk × V, not (L-1) × V.
+    """
+    shifted_hidden = hidden[:-1].contiguous()
+    shift_labels = labels[1:].clone()
+    shift_labels[seq_lens.cumsum(0)[:-1] - 1] = IGNORE_INDEX
+
+    def _ce_chunk(h: torch.Tensor, lbl: torch.Tensor) -> torch.Tensor:
+        return F.cross_entropy(lm_head(h), lbl, ignore_index=IGNORE_INDEX, reduction="none")
+
+    n = shifted_hidden.shape[0]
+    ce_chunks: list[torch.Tensor] = []
+    for start in range(0, n, chunk):
+        end = min(start + chunk, n)
+        h_c, l_c = shifted_hidden[start:end], shift_labels[start:end]
+        if checkpoint:
+            ce_c = torch.utils.checkpoint.checkpoint(_ce_chunk, h_c, l_c, use_reentrant=False)
+        else:
+            ce_c = _ce_chunk(h_c, l_c)
+        assert isinstance(ce_c, torch.Tensor)
+        ce_chunks.append(ce_c)
+    return torch.cat(ce_chunks, dim=0), shift_labels
 
 
 def _prepend_registers(
@@ -90,12 +130,15 @@ PolicyInputs = TypedDict(
         "camera_indices": list[torch.Tensor],
         "action": list[torch.Tensor],
         "action_is_pad": list[torch.Tensor | None],
+        "action_dim_valid": list[torch.Tensor | None],
         "chunk_size": list[int],
         "frame_pos": torch.Tensor,
         "group_index": torch.Tensor,
         "k_eff": list[int],
         "observation.language.tokens": torch.Tensor,
         "seq_lens": torch.Tensor,
+        "labels": torch.Tensor,
+        "region_tags": torch.Tensor,
     },
     total=False,
 )
@@ -148,6 +191,93 @@ def build_register_memory_indices(
     src_blk = src_own * n_draws + (blk % n_draws)
     reg_rows = cu_e[src_blk].unsqueeze(1) + torch.arange(n_reg, device=device).unsqueeze(0)
     return reg_rows.reshape(-1), (counts_blk * n_reg).to(torch.int32)
+
+
+@dataclass
+class TokenBreakdown:
+    """The CE regions of a packed label sequence."""
+
+    robot_mask: torch.Tensor
+    subtask_region: torch.Tensor
+    text_mask: torch.Tensor
+    n_robot_samples: int
+    n_text_samples: int
+
+
+def expert_visible(region_tags: torch.Tensor) -> torch.Tensor:
+    """The tokens of the user turn, which the action expert attends to."""
+    return (
+        (region_tags == RegionTag.USER)
+        | (region_tags == RegionTag.USER_SUBTASK)
+        | (region_tags == RegionTag.USER_SUBTASK_HEADER)
+    )
+
+
+def classify_tokens(
+    shift_labels: torch.Tensor,
+    seq_lens: torch.Tensor,
+    is_robot_sample: list[bool],
+    region_tags: torch.Tensor | None = None,
+) -> TokenBreakdown:
+    """Split the supervised tokens of the packed ``shift_labels`` (``packed_shifted_ce``: the
+    sample boundaries are already IGNORE_INDEX) into robot samples (subtask CE) and text samples.
+
+    ``is_robot_sample`` flags the samples with actions; one counts as a robot sample only with a
+    token other than ``USER`` (the first token of a sample is always ``USER``). ``region_tags``
+    is the per-token ``RegionTag`` of the dataset; None (a batch of VL samples only) means all
+    ``USER``.
+    """
+    device = shift_labels.device
+    valid = shift_labels != IGNORE_INDEX
+    B = seq_lens.shape[0]
+    sample_id = torch.repeat_interleave(torch.arange(B, device=device), seq_lens.to(device).long())
+    robot_sample = torch.zeros(B, dtype=torch.bool, device=device)
+    subtask_region = torch.zeros_like(valid)
+    if region_tags is not None:
+        tags = region_tags.to(device)
+        n_tagged = torch.zeros(B, device=device).index_add_(
+            0, sample_id, (tags != RegionTag.USER).float()
+        )
+        robot_sample = torch.as_tensor(is_robot_sample, device=device) & (n_tagged > 0)
+        label_tags = tags[1:]
+        subtask_region = (
+            (label_tags == RegionTag.SUBTASK) | (label_tags == RegionTag.USER_SUBTASK)
+        ) & valid
+    on_robot = robot_sample[sample_id[:-1]]
+    n_valid = torch.zeros(B, device=device).index_add_(0, sample_id[:-1], valid.float())
+    return TokenBreakdown(
+        robot_mask=valid & on_robot,
+        subtask_region=subtask_region,
+        text_mask=valid & ~on_robot,
+        n_robot_samples=int(robot_sample.sum()),
+        n_text_samples=int((~robot_sample & (n_valid > 0)).sum()),
+    )
+
+
+def ce_losses(ce_per_token: torch.Tensor, tb: TokenBreakdown) -> dict[str, torch.Tensor]:
+    """``text_loss``, ``subtask_loss`` (each present when it has tokens) and ``ce_loss``, where
+    robot and text samples count by sample, not by token."""
+    losses: dict[str, torch.Tensor] = {}
+    text_loss = ce_per_token[tb.text_mask].mean() if tb.text_mask.any() else None
+    if text_loss is not None:
+        losses["text_loss"] = text_loss
+
+    if tb.subtask_region.any():
+        losses["subtask_loss"] = ce_per_token[tb.subtask_region].mean()
+
+    robot_sample_loss = ce_per_token[tb.robot_mask].mean() if tb.robot_mask.any() else None
+    total = tb.n_robot_samples + tb.n_text_samples
+    if robot_sample_loss is not None and text_loss is not None:
+        losses["ce_loss"] = (
+            tb.n_robot_samples * robot_sample_loss + tb.n_text_samples * text_loss
+        ) / total
+    elif robot_sample_loss is not None:
+        losses["ce_loss"] = robot_sample_loss
+    elif text_loss is not None:
+        losses["ce_loss"] = text_loss
+    else:
+        losses["ce_loss"] = ce_per_token.sum()
+    return losses
 
 
 class RekiModel(nn.Module):
@@ -288,26 +418,31 @@ class RekiModel(nn.Module):
 
     def prepare_action(
         self, batch: "PolicyInputs"
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Expand K-frame samples into B_expert = sum(K_eff) virtual expert samples,
         packed along the time axis.
 
         Returns (actions [N, max_action_dim] packed, mask same shape, robot_indices
         [B_e] owning-sample idx, anchor_frame [B_e] chunk idx within its sample,
-        cs_per_sample [B_e] per-virtual-sample chunk length). N = sum(cs_per_sample).
+        cs_per_sample [B_e] per-virtual-sample chunk length, loss_mask = mask without the
+        ``ACTION_DIM_VALID`` False dims, whose action is set to 0). N = sum(cs_per_sample).
         """
         action = batch[ACTION]
         cs_list = batch["chunk_size"]
         k_eff_list = batch["k_eff"]
         time_pad_list = batch[ACTION_IS_PAD]
+        valid_list = batch.get(ACTION_DIM_VALID) or [None] * len(action)
 
         per_chunk: list[torch.Tensor] = []
         per_chunk_pad: list[torch.Tensor | None] = []
+        per_chunk_valid: list[torch.Tensor | None] = []
         owner: list[int] = []
         anchor: list[int] = []
         cs_list_out: list[int] = []
-        cands: list[tuple[int, int, torch.Tensor, torch.Tensor | None]] = []
+        cands: list[tuple[int, int, torch.Tensor, torch.Tensor | None, torch.Tensor | None]] = []
         for i, a in enumerate(action):
+            if a is None:  # a VL sample
+                continue
             k_eff_i = int(k_eff_list[i])
             cs_i = int(cs_list[i])
             n_steps = a.shape[0]
@@ -318,10 +453,22 @@ class RekiModel(nn.Module):
             time_pad = time_pad_list[i]
             if time_pad is not None:
                 p3 = time_pad.reshape(K_total, cs_i)[-k_eff_i:]
+            v3: torch.Tensor | None = None
+            valid = valid_list[i]
+            if valid is not None:
+                v3 = valid.reshape(K_total, cs_i, a.shape[-1])[-k_eff_i:]
             for k in range(k_eff_i):
-                cands.append((i, k, a3[k], p3[k] if p3 is not None else None))
+                cands.append(
+                    (
+                        i,
+                        k,
+                        a3[k],
+                        p3[k] if p3 is not None else None,
+                        v3[k] if v3 is not None else None,
+                    )
+                )
         # Valid lengths of every padded chunk in one device->host transfer.
-        pads = [p.bool() for _, _, _, p in cands if p is not None]
+        pads = [p.bool() for _, _, _, p, _ in cands if p is not None]
         stats = iter(
             torch.stack(
                 [torch.stack([(~p).sum(), (p[1:].int() < p[:-1].int()).any().long()]) for p in pads]
@@ -329,16 +476,19 @@ class RekiModel(nn.Module):
             if pads
             else []
         )
-        for i, k, chunk, pad_k in cands:
+        for i, k, chunk, pad_k, valid_k in cands:
             if pad_k is not None:
                 n_valid, unpad_after_pad = next(stats)
                 assert not unpad_after_pad, "action_is_pad must be a contiguous suffix"
                 chunk = chunk[:n_valid]
+                if valid_k is not None:
+                    valid_k = valid_k[:n_valid]
                 pad_k = None
             if chunk.shape[0] == 0:
                 continue
             per_chunk.append(chunk)
             per_chunk_pad.append(pad_k)
+            per_chunk_valid.append(valid_k)
             owner.append(i)
             anchor.append(k)
             cs_list_out.append(chunk.shape[0])
@@ -349,54 +499,73 @@ class RekiModel(nn.Module):
         target_dim = self.config.max_action_dim
         per_chunk_padded: list[torch.Tensor] = []
         per_mask: list[torch.Tensor] = []
-        for c, tp in zip(per_chunk, per_chunk_pad):
+        per_loss_mask: list[torch.Tensor] = []
+        for c, tp, v in zip(per_chunk, per_chunk_pad, per_chunk_valid):
             valid_dim = c.shape[-1]
-            c_pad = F.pad(c, (0, target_dim - valid_dim))
-            m = torch.zeros_like(c_pad, dtype=torch.bool)
+            m = torch.zeros(c.shape[0], target_dim, dtype=torch.bool, device=c.device)
             m[:, :valid_dim] = True
             if tp is not None:
                 m = m & ~tp.to(device=c.device, dtype=torch.bool).unsqueeze(-1)
-            per_chunk_padded.append(c_pad)
+            lm = m
+            if v is not None:
+                v = v.to(device=c.device, dtype=torch.bool)
+                c = c * v.to(c.dtype)
+                lm = m.clone()
+                lm[:, :valid_dim] &= v
+            per_chunk_padded.append(F.pad(c, (0, target_dim - valid_dim)))
             per_mask.append(m)
+            per_loss_mask.append(lm)
         actions = torch.cat(per_chunk_padded, dim=0)
         mask = torch.cat(per_mask, dim=0)
+        loss_mask = torch.cat(per_loss_mask, dim=0)
 
         device = actions.device
         robot_indices = torch.tensor(owner, dtype=torch.long, device=device)
         anchor_frame = torch.tensor(anchor, dtype=torch.long, device=device)
         cs_per_sample = torch.tensor(cs_list_out, dtype=torch.long, device=device)
-        return actions, mask, robot_indices, anchor_frame, cs_per_sample
+        return actions, mask, robot_indices, anchor_frame, cs_per_sample, loss_mask
 
     def forward(self, batch: "PolicyInputs") -> tuple[torch.Tensor, dict]:
-        """Run the batch through the model and compute the loss for training."""
+        """Run the batch through the model and compute the loss for training. A batch can mix
+        robot samples (with actions) and VL samples (action None, text CE only)."""
         vision_inputs = batch["vision_inputs"]
         packed_tokens = batch[OBS_LANGUAGE_TOKENS]
         seq_lens = batch["seq_lens"]
+        is_robot_sample = [a is not None for a in batch[ACTION]]
+        has_robot = any(is_robot_sample)
 
-        actions, pad_mask, robot_indices, anchor_frame, cs_per_sample = self.prepare_action(batch)
-        robot_indices = robot_indices.to(device=packed_tokens.device)
-        anchor_frame = anchor_frame.to(device=packed_tokens.device)
-        cs_per_sample = cs_per_sample.to(device=packed_tokens.device)
+        actions = pad_mask = loss_mask = robot_indices = anchor_frame = cs_per_sample = None
+        n_draws = 1
+        if has_robot:
+            actions, pad_mask, robot_indices, anchor_frame, cs_per_sample, loss_mask = (
+                self.prepare_action(batch)
+            )
+            robot_indices = robot_indices.to(device=packed_tokens.device)
+            anchor_frame = anchor_frame.to(device=packed_tokens.device)
+            cs_per_sample = cs_per_sample.to(device=packed_tokens.device)
 
-        n_draws = self.config.flow_draws if torch.is_grad_enabled() else 1
-        if n_draws > 1:
-            cs_long = cs_per_sample.long()
-            cu = torch.zeros(cs_long.shape[0] + 1, dtype=torch.long, device=cs_long.device)
-            cu[1:] = cs_long.cumsum(0)
-            cs_action = cs_long.repeat_interleave(n_draws)
-            cu_a = torch.zeros(cs_action.shape[0] + 1, dtype=torch.long, device=cs_action.device)
-            cu_a[1:] = cs_action.cumsum(0)
-            n_tok = int(cs_action.sum())
-            seg = torch.arange(cs_action.shape[0], device=cs_action.device).repeat_interleave(
-                cs_action
-            )
-            offset = torch.arange(n_tok, device=cs_action.device) - cu_a[:-1].repeat_interleave(
-                cs_action
-            )
-            om_idx = cu[seg // n_draws] + offset
-            actions = actions[om_idx]
-            pad_mask = pad_mask[om_idx]
-            cs_per_sample = cs_action.to(cs_per_sample.dtype)
+            n_draws = self.config.flow_draws if torch.is_grad_enabled() else 1
+            if n_draws > 1:
+                cs_long = cs_per_sample.long()
+                cu = torch.zeros(cs_long.shape[0] + 1, dtype=torch.long, device=cs_long.device)
+                cu[1:] = cs_long.cumsum(0)
+                cs_action = cs_long.repeat_interleave(n_draws)
+                cu_a = torch.zeros(
+                    cs_action.shape[0] + 1, dtype=torch.long, device=cs_action.device
+                )
+                cu_a[1:] = cs_action.cumsum(0)
+                n_tok = int(cs_action.sum())
+                seg = torch.arange(cs_action.shape[0], device=cs_action.device).repeat_interleave(
+                    cs_action
+                )
+                offset = torch.arange(n_tok, device=cs_action.device) - cu_a[:-1].repeat_interleave(
+                    cs_action
+                )
+                om_idx = cu[seg // n_draws] + offset
+                actions = actions[om_idx]
+                pad_mask = pad_mask[om_idx]
+                loss_mask = loss_mask[om_idx]
+                cs_per_sample = cs_action.to(cs_per_sample.dtype)
 
         # Starts a fresh ExpertForwardState; the expert inputs are set on it from here on.
         prefix_embeds = self.model.vlm_with_expert.embed_vlm_inputs(
@@ -407,7 +576,8 @@ class RekiModel(nn.Module):
         self.model.vlm_with_expert.fwd.flow_draws = n_draws
 
         expert_state: tuple[list[str | None], list[torch.Tensor | None]] | None = None
-        if self.config.state_encoding == "adaln":
+        if self.config.state_encoding == "adaln" and has_robot:
+            assert robot_indices is not None and anchor_frame is not None
             embs_batch = batch.get("state_mlp_embodiment")
             states_batch = batch.get(OBS_STATE)
             assert embs_batch is not None and states_batch is not None, (
@@ -430,6 +600,7 @@ class RekiModel(nn.Module):
         loss_dict_out = self.model.forward(
             prefix_embeds,
             seq_lens,
+            is_robot_sample=is_robot_sample,
             actions=actions,
             robot_indices=robot_indices,
             cs_per_sample=cs_per_sample,
@@ -437,35 +608,72 @@ class RekiModel(nn.Module):
             group_index=batch["group_index"],
             frame_pos=batch["frame_pos"],
             action_dim_mask=pad_mask,
+            labels=batch.get("labels"),
+            region_tags=batch.get("region_tags"),
         )
 
         loss_dict: dict[str, Any] = {}
-        flow_losses = loss_dict_out["flow_loss"] * pad_mask.to(loss_dict_out["flow_loss"].dtype)
-        denom_per_dim = pad_mask.sum(dim=0).clamp_min(1)
-        # Keep on GPU: .cpu()/.item() here forces a CUDA sync every step.
-        loss_dict["loss_per_dim"] = (flow_losses.sum(dim=0) / denom_per_dim).detach()
-        if self.config.flow_loss_dof_balanced:
-            B_e = cs_per_sample.shape[0]
-            virt_idx = torch.arange(B_e, device=flow_losses.device).repeat_interleave(cs_per_sample)
-            per_sample_num = torch.zeros(B_e, device=flow_losses.device, dtype=flow_losses.dtype)
-            per_sample_num.scatter_add_(0, virt_idx, flow_losses.sum(dim=-1))
-            per_sample_den = torch.zeros(B_e, device=flow_losses.device, dtype=flow_losses.dtype)
-            per_sample_den.scatter_add_(0, virt_idx, pad_mask.sum(dim=-1).to(flow_losses.dtype))
-            per_sample = per_sample_num / per_sample_den.clamp_min(1)
-            flow_loss = per_sample.mean()
-        else:
-            denom = pad_mask.sum().clamp_min(1)
-            flow_loss = flow_losses.sum() / denom
-        loss_dict["flow_loss"] = flow_loss.detach()
+        total_loss = torch.zeros((), device=packed_tokens.device)
+        if has_robot:
+            assert loss_mask is not None and cs_per_sample is not None
+            flow_losses = loss_dict_out["flow_loss"] * loss_mask.to(
+                loss_dict_out["flow_loss"].dtype
+            )
+            denom_per_dim = loss_mask.sum(dim=0).clamp_min(1)
+            # Keep on GPU: .cpu()/.item() here forces a CUDA sync every step.
+            loss_dict["loss_per_dim"] = (flow_losses.sum(dim=0) / denom_per_dim).detach()
+            if self.config.flow_loss_dof_balanced:
+                B_e = cs_per_sample.shape[0]
+                virt_idx = torch.arange(B_e, device=flow_losses.device).repeat_interleave(
+                    cs_per_sample
+                )
+                per_sample_num = torch.zeros(
+                    B_e, device=flow_losses.device, dtype=flow_losses.dtype
+                )
+                per_sample_num.scatter_add_(0, virt_idx, flow_losses.sum(dim=-1))
+                per_sample_den = torch.zeros(
+                    B_e, device=flow_losses.device, dtype=flow_losses.dtype
+                )
+                per_sample_den.scatter_add_(
+                    0, virt_idx, loss_mask.sum(dim=-1).to(flow_losses.dtype)
+                )
+                per_sample = per_sample_num / per_sample_den.clamp_min(1)
+                flow_loss = per_sample.mean()
+            else:
+                denom = loss_mask.sum().clamp_min(1)
+                flow_loss = flow_losses.sum() / denom
+            loss_dict["flow_loss"] = flow_loss.detach()
+            total_loss = total_loss + flow_loss
 
-        total_loss = flow_loss
+        if "ce_loss" in loss_dict_out:
+            ce_loss = loss_dict_out["ce_loss"]
+            loss_dict["ce_loss"] = ce_loss.detach()
+            total_loss = total_loss + self.config.ce_loss_weight * ce_loss
+            for sub_key in ("subtask_loss", "text_loss"):
+                if sub_key in loss_dict_out:
+                    loss_dict[sub_key] = loss_dict_out[sub_key].detach()
 
         # Every state MLP adds a zero term, so the DDP unused-parameter set is the same on all
-        # ranks.
+        # ranks. The same for the action path on a batch of VL samples only.
+        zero_terms: list[nn.Module] = []
         state_mlps = self.model.vlm_with_expert.state_mlps
         if state_mlps is not None:
-            for mlp in state_mlps.values():
-                total_loss = total_loss + 0 * sum(p.sum() for p in mlp.parameters())
+            zero_terms.extend(state_mlps.values())
+        if not has_robot:
+            zero_terms.extend(
+                m
+                for m in (
+                    self.model.action_in_proj,
+                    self.model.action_out_proj,
+                    self.model.time_mlp_in,
+                    self.model.time_mlp_out,
+                    self.model.vlm_with_expert.action_expert,
+                    self.model.state_adaln_proj,
+                )
+                if m is not None
+            )
+        for m in zero_terms:
+            total_loss = total_loss + 0 * sum(p.sum() for p in m.parameters())
 
         loss_dict["loss"] = total_loss.detach()
         return total_loss, loss_dict
@@ -565,21 +773,26 @@ class RekiFlowModel(nn.Module):
         prefix_embeds: torch.Tensor,
         seq_lens: torch.Tensor,
         *,
-        actions: torch.Tensor,
-        robot_indices: torch.Tensor,
-        cs_per_sample: torch.Tensor,
+        is_robot_sample: list[bool],
+        actions: torch.Tensor | None,
+        robot_indices: torch.Tensor | None,
+        cs_per_sample: torch.Tensor | None,
         expert_state: tuple[list[str | None], list[torch.Tensor | None]] | None = None,
-        group_index: torch.Tensor,
-        frame_pos: torch.Tensor,
-        action_dim_mask: torch.Tensor,
+        group_index: torch.Tensor | None,
+        frame_pos: torch.Tensor | None,
+        action_dim_mask: torch.Tensor | None,
+        labels: torch.Tensor | None = None,
+        region_tags: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """Do a full training forward pass and compute the loss.
 
         Args:
             prefix_embeds: [1, total_L, D] packed VLM prefix embeddings.
             seq_lens: [B] per-sample token lengths.
+            is_robot_sample: [B] True on the samples with actions.
             actions: [N, max_action_dim] actions packed along time, one block of
-                cs_per_sample rows per chunk (prepare_action unrolls K-frame samples).
+                cs_per_sample rows per chunk (prepare_action unrolls K-frame samples). None
+                on a batch of VL samples only, as are the other action inputs.
             action_dim_mask: [N, max_action_dim] bool, True on the real action dims.
                 The padded dims get no noise, so x_t and u_t are exactly 0 there.
             robot_indices: [B_chunks] owning VLM sample of each chunk.
@@ -589,61 +802,79 @@ class RekiFlowModel(nn.Module):
             group_index: [B] history group of each VLM sample; register memory stays in a group.
             frame_pos: [B] frame position of each VLM sample in its group; a block attends to the
                 registers of its group's frames up to its own.
+            labels: [total_L] packed CE labels, IGNORE_INDEX on the unsupervised tokens.
+            region_tags: [total_L] ``RegionTag`` of each token. The expert cross-attends to the
+                user turn only, and its MRoPE starts after the user turn.
         """
-        B_e = cs_per_sample.shape[0]
-        noise = self.sample_noise(actions.shape, actions.device)
-        noise = noise * action_dim_mask.to(noise.dtype)
-
-        time = self.sample_time(B_e, actions.device)
-
-        time_per_token = time.repeat_interleave(cs_per_sample)
-        time_expanded = time_per_token[:, None]
-        x_t = time_expanded * noise + (1 - time_expanded) * actions
-        u_t = noise - actions
-
-        state_cond: torch.Tensor | None = None
-        if self.config.state_encoding == "adaln":
-            assert expert_state is not None, "state_encoding='adaln' requires expert_state"
-            cond_owner = self._state_adaln_cond(*expert_state)
-            assert B_e % cond_owner.shape[0] == 0, (
-                f"adaln cond: {B_e} action blocks not a multiple of {cond_owner.shape[0]} owners"
-            )
-            n_draws = B_e // cond_owner.shape[0]
-            state_cond = cond_owner.repeat_interleave(n_draws, dim=0) if n_draws > 1 else cond_owner
-        suffix_embeds, adarms_cond = self.embed_actions(x_t, time, cs_per_sample, state_cond)
-
-        reg = self.vlm_with_expert.action_expert.registers
-        n_draws = cs_per_sample.shape[0] // robot_indices.shape[0]
-        suffix_embeds, adarms_cond, cs_expert, expert_is_register, expert_action_row_idx = (
-            _prepend_registers(
-                suffix_embeds,
-                adarms_cond,
-                reg,
-                cs_per_sample,
-                n_draws,
-            )
-        )
-
-        # The forward state is fresh (embed_vlm_inputs started it); set the expert inputs.
+        suffix_embeds: torch.Tensor | None = None
+        adarms_cond: torch.Tensor | None = None
+        u_t: torch.Tensor | None = None
+        expert_action_row_idx: torch.Tensor | None = None
         fwd = self.vlm_with_expert.fwd
-        fwd.cs_per_sample = cs_expert
-        fwd.expert_is_register = expert_is_register
+        if actions is not None:
+            assert cs_per_sample is not None and robot_indices is not None
+            assert action_dim_mask is not None and group_index is not None
+            assert frame_pos is not None
+            B_e = cs_per_sample.shape[0]
+            noise = self.sample_noise(actions.shape, actions.device)
+            noise = noise * action_dim_mask.to(noise.dtype)
 
-        gi_own = group_index.to(robot_indices.device)[robot_indices]
-        fp_own = frame_pos.to(robot_indices.device)[robot_indices]
-        n_draws_reg = cs_expert.shape[0] // robot_indices.shape[0]
-        reg_flat_idx, reg_counts = build_register_memory_indices(
-            cs_expert,
-            fp_own,
-            gi_own,
-            self.config.action_expert_num_registers,
-            n_draws_reg,
-        )
-        fwd.reg_kv_flat_idx = reg_flat_idx
-        fwd.reg_kv_counts = reg_counts
-        fwd.expert_frame_pos = fp_own
+            time = self.sample_time(B_e, actions.device)
 
-        (_, suffix_out), _ = self.vlm_with_expert.forward(
+            time_per_token = time.repeat_interleave(cs_per_sample)
+            time_expanded = time_per_token[:, None]
+            x_t = time_expanded * noise + (1 - time_expanded) * actions
+            u_t = noise - actions
+
+            state_cond: torch.Tensor | None = None
+            if self.config.state_encoding == "adaln":
+                assert expert_state is not None, "state_encoding='adaln' requires expert_state"
+                cond_owner = self._state_adaln_cond(*expert_state)
+                assert B_e % cond_owner.shape[0] == 0, (
+                    f"adaln cond: {B_e} action blocks not a multiple of {cond_owner.shape[0]} "
+                    "owners"
+                )
+                n_draws = B_e // cond_owner.shape[0]
+                state_cond = (
+                    cond_owner.repeat_interleave(n_draws, dim=0) if n_draws > 1 else cond_owner
+                )
+            suffix_embeds, adarms_cond = self.embed_actions(x_t, time, cs_per_sample, state_cond)
+
+            reg = self.vlm_with_expert.action_expert.registers
+            n_draws = cs_per_sample.shape[0] // robot_indices.shape[0]
+            suffix_embeds, adarms_cond, cs_expert, expert_is_register, expert_action_row_idx = (
+                _prepend_registers(
+                    suffix_embeds,
+                    adarms_cond,
+                    reg,
+                    cs_per_sample,
+                    n_draws,
+                )
+            )
+
+            # The forward state is fresh (embed_vlm_inputs started it); set the expert inputs.
+            fwd.cs_per_sample = cs_expert
+            fwd.expert_is_register = expert_is_register
+            if region_tags is not None:
+                # The expert never attends to the assistant turn, and the inference prompt
+                # holds only the user turn.
+                fwd.expert_user_mask = expert_visible(region_tags)
+
+            gi_own = group_index.to(robot_indices.device)[robot_indices]
+            fp_own = frame_pos.to(robot_indices.device)[robot_indices]
+            n_draws_reg = cs_expert.shape[0] // robot_indices.shape[0]
+            reg_flat_idx, reg_counts = build_register_memory_indices(
+                cs_expert,
+                fp_own,
+                gi_own,
+                self.config.action_expert_num_registers,
+                n_draws_reg,
+            )
+            fwd.reg_kv_flat_idx = reg_flat_idx
+            fwd.reg_kv_counts = reg_counts
+            fwd.expert_frame_pos = fp_own
+
+        (vlm_out, suffix_out), _ = self.vlm_with_expert.forward(
             seq_lens=seq_lens,
             inputs_embeds=(prefix_embeds, suffix_embeds),
             adarms_cond=adarms_cond,
@@ -652,12 +883,24 @@ class RekiFlowModel(nn.Module):
 
         losses: dict[str, torch.Tensor] = {}
 
-        assert suffix_out is not None
-        suffix_out = suffix_out[expert_action_row_idx]
+        if u_t is not None:
+            assert suffix_out is not None
+            suffix_out = suffix_out[expert_action_row_idx]
+            with torch.autocast(device_type=suffix_out.device.type, enabled=False):
+                v_t = _proj_fp32(self.action_out_proj, suffix_out)
+            losses["flow_loss"] = F.mse_loss(u_t.float(), v_t, reduction="none")
 
-        with torch.autocast(device_type=suffix_out.device.type, enabled=False):
-            v_t = _proj_fp32(self.action_out_proj, suffix_out)
-        losses["flow_loss"] = F.mse_loss(u_t.float(), v_t, reduction="none")
+        if labels is not None:
+            assert vlm_out is not None
+            ce_per_token, shift_labels = packed_shifted_ce(
+                vlm_out.squeeze(0),
+                labels,
+                seq_lens,
+                type_cast(nn.Module, self.vlm_with_expert.vlm.lm_head),
+                checkpoint=self.training,
+            )
+            tb = classify_tokens(shift_labels, seq_lens, is_robot_sample, region_tags=region_tags)
+            losses.update(ce_losses(ce_per_token, tb))
 
         return losses
 

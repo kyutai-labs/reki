@@ -9,7 +9,7 @@ from lerobot.utils.constants import (
     OBS_STATE,
 )
 
-from reki.policy.constants import ACTION_IS_PAD
+from reki.policy.constants import ACTION_DIM_VALID, ACTION_IS_PAD, IGNORE_INDEX, RegionTag
 
 
 def _trim_units_by(
@@ -68,10 +68,32 @@ def combined_collate(
         "group_index": torch.tensor(group_index, dtype=torch.long),
         "frame_pos": torch.tensor(frame_pos, dtype=torch.long),
     }
-    for key in [OBS_STATE, ACTION, ACTION_IS_PAD]:
+    for key in [OBS_STATE, ACTION, ACTION_IS_PAD, ACTION_DIM_VALID]:
         result[key] = [item.get(key) for item in batch]
 
     result["chunk_size"] = [item.get("chunk_size") for item in batch]
+
+    has_labels = any("labels" in item for item in batch)
+    if has_labels:
+        label_parts = []
+        for item in batch:
+            if "labels" in item:
+                label_parts.append(item["labels"])
+            else:
+                seq_len = item[OBS_LANGUAGE_TOKENS].shape[-1]
+                label_parts.append(torch.full((seq_len,), IGNORE_INDEX, dtype=torch.long))
+        result["labels"] = torch.cat(label_parts)
+
+    # A token without a tag is in the user turn.
+    if any("region_tags" in item for item in batch):
+        tag_parts = []
+        for item in batch:
+            if "region_tags" in item:
+                tag_parts.append(item["region_tags"])
+            else:
+                seq_len = item[OBS_LANGUAGE_TOKENS].shape[-1]
+                tag_parts.append(torch.full((seq_len,), RegionTag.USER, dtype=torch.int8))
+        result["region_tags"] = torch.cat(tag_parts)
 
     if any("state_mlp_embodiment" in item for item in batch):
         result["state_mlp_embodiment"] = [item.get("state_mlp_embodiment") for item in batch]

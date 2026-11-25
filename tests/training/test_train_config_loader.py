@@ -81,10 +81,8 @@ def test_sft_launcher_cli_round_trip(launcher: ModuleType, benchmark: str) -> No
 
 
 def test_shipped_configs_strict_load() -> None:
-    # cpt.yaml (reference recipe of kyutai/reki-2b) keeps pretraining keys TrainConfig does not define
     for yml in sorted((REPO / "configs").glob("*.yaml")):
-        if yml.name != "cpt.yaml":
-            TrainConfig.load_yaml_kwargs(yml)
+        TrainConfig.load_yaml_kwargs(yml)
 
 
 def test_checkpoint_config_rejects_python_objects(tmp_path: Path) -> None:

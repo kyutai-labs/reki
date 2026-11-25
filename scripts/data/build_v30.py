@@ -20,7 +20,13 @@ from pathlib import Path
 
 import numpy as np
 import pyarrow.parquet as pq
-from shared import V30_META_FEATURES, V30_VIDEO_PATH, write_v30_episodes, write_v30_tasks
+from shared import (
+    V30_META_FEATURES,
+    V30_VIDEO_PATH,
+    link_tree,
+    write_v30_episodes,
+    write_v30_tasks,
+)
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -59,7 +65,7 @@ def convert(V21_ROOT: Path, V30_ROOT: Path, link_data: bool = False) -> None:
         if dst.is_symlink() or dst.exists():
             dst.unlink()
         if link_data:
-            os.symlink(src, dst)
+            link_tree(Path(src), dst)
         else:
             shutil.copy2(src, dst)
         if (i + 1) % 1000 == 0:
@@ -124,11 +130,11 @@ def convert(V21_ROOT: Path, V30_ROOT: Path, link_data: bool = False) -> None:
         logger.info("No episodes_stats.jsonl; copying aggregated stats.json verbatim")
         shutil.copy2(V21_ROOT / "meta" / "stats.json", V30_ROOT / "meta" / "stats.json")
 
-    videos_link = V30_ROOT / "videos"
-    if videos_link.exists():
-        videos_link.unlink()
-    os.symlink(V21_ROOT / "videos", videos_link)
-    logger.info("Symlinked videos")
+    if (V30_ROOT / "videos").exists():
+        shutil.rmtree(V30_ROOT / "videos")
+    if (V21_ROOT / "videos").exists():
+        link_tree(V21_ROOT / "videos", V30_ROOT / "videos")
+        logger.info("Linked videos")
 
     info["video_path"] = V30_VIDEO_PATH
     with open(V30_ROOT / "meta" / "info.json", "w") as f:
@@ -146,7 +152,7 @@ def main() -> None:
     parser.add_argument(
         "--link_data",
         action="store_true",
-        help="symlink data parquets instead of copying (schema unchanged; saves disk)",
+        help="hard-link data parquets instead of copying (schema unchanged; saves disk)",
     )
     parser.add_argument("--dry_run", action="store_true", help="list what would be written")
 

@@ -131,6 +131,23 @@ V30_META_FEATURES = {
 V30_VIDEO_PATH = "videos/chunk-{chunk_index:03d}/{video_key}/episode_{file_index:06d}.mp4"
 
 
+def link_tree(src: Path, dst: Path) -> None:
+    """Hard-link the file ``src``, or each file under the directory ``src``, at ``dst``. No disk
+    is used, and ``dst`` stays valid when ``src`` is deleted. Where a hard link fails (``src`` on
+    another filesystem), the file is copied."""
+    src = src.resolve(strict=True)
+    if src.is_file():
+        pairs = [(src, dst)]
+    else:
+        pairs = [(f, dst / f.relative_to(src)) for f in src.rglob("*") if f.is_file()]
+    for f, d in pairs:
+        d.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.link(f.resolve(), d)
+        except OSError:
+            shutil.copy2(f, d)
+
+
 def convert_groot_leaf(
     src_leaf: Path,
     dst_leaf: Path,

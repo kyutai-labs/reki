@@ -44,7 +44,7 @@ where = ["."]
 include = ["reki*"]
 
 [tool.pytest.ini_options]
-pythonpath = [".", "launchers"]
+pythonpath = [".", "launchers", "scripts/data"]
 addopts = "--strict-markers"
 markers = [
     "cpu: pure logic, no downloads",
@@ -155,6 +155,34 @@ PyOpenGL = "*"
 PyOpenGL-accelerate = "*"
 # torch and transformers come from [tool.pixi.pypi-dependencies].
 
+# data: the pretraining data pipeline (scripts/data/), not training or the PyPI package.
+# mcap (ABC recordings), MANO fits (egodex, egoverse), robosuite FK (same pins as sim-plus).
+[tool.pixi.feature.data.dependencies]
+# chumpy's setup.py imports pip: it builds without isolation, against these.
+pip = "==25.2"
+setuptools = "==80.9.0"
+# lerobot 0.5.1 needs packaging<26.
+packaging = "==25.0"
+
+[tool.pixi.feature.data.pypi-options]
+no-build-isolation = ["chumpy"]
+
+[tool.pixi.feature.data.pypi-dependencies]
+mcap = "==1.4.0"
+mcap-protobuf-support = "==0.5.4"
+protobuf = "==6.31.1"
+robosuite = "==1.4.0"
+mujoco = "==3.3.2"
+chumpy = { git = "https://github.com/mattloper/chumpy", rev = "580566eafc9ac68b2614b64d6f7aaa84eebb70da" }
+mano = { git = "https://github.com/otaheri/MANO", rev = "5869ab059c1bf31cc724f57eaf93e041135e8960" }
+trimesh = "==5.1.1"
+h5py = "==3.16.0"
+# EgoVerse: Zarr v3 episodes in a Cloudflare R2 bucket (S3 API).
+zarr = "==3.4.2"
+boto3 = "==1.43.126"
+# Same tqdm as the default env (reki patches tqdm's lock; 4.70 changed ensure_lock).
+tqdm = "==4.68.2"
+
 [tool.pixi.tasks]
 # Uses every visible GPU (multi-GPU when more than one); bf16 is set in train.py.
 train = "accelerate launch scripts/train.py"
@@ -180,3 +208,4 @@ pytest = "*"
 default = ["launch", "dev"]
 sim = ["sim"]
 sim-plus = ["sim-plus"]
+data = ["data"]

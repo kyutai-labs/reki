@@ -43,9 +43,14 @@ class TrainConfig:
     dataset: str | list[str] | tuple[str, ...] = "libero"
     chunk_size: int = 50
     chunk_duration_s: float | None = 1.0
+    action_pace: dict[str, float] = field(default_factory=dict)
     dataset_weighting: Literal["power_law", "manual"] = "power_law"
     frames_alpha: float = 0.5
     weight_overrides: dict[str, float] = field(default_factory=dict)
+    language_diversity_path: str | None = None
+    language_alpha: float = 0.5
+    vision_diversity_path: str | None = None
+    vision_alpha: float = 0.25
     max_epochs_per_dataset: int = 100
 
     video_backend: Literal["pyav", "torchcodec"] = "torchcodec"
@@ -65,6 +70,9 @@ class TrainConfig:
     decay_steps: int = 0
     ema_decay: float | None = 0.999
 
+    vl_datasets: str | list[str] | None = None
+    vl_ratio: float = 0.2
+    vl_max_num_qa_pairs: int = 1
     max_text_tokens: int | None = 30000
 
     pretrained_path: str | None = None
@@ -83,6 +91,7 @@ class TrainConfig:
 
     mirror_prob: float = 0.0
 
+    ce_loss_weight: float = 0.1
     flow_draws: int = 8
     flow_loss_dof_balanced: bool = True
     action_expert_hidden_size: int = 768
@@ -104,6 +113,9 @@ class TrainConfig:
     camera_dropout_prob: float = 0.2
     pin_overhead_camera: bool = True
     shuffle_cameras: bool = True
+    drop_extra_side_cameras: bool = False
+    drop_static_wrist_camera: bool = False
+    wrist_static_threshold: float = 0.1
     use_camera_role_tokens: bool = True
     action_expert_num_registers: int = 32
 
@@ -111,7 +123,15 @@ class TrainConfig:
 
     ddp_static_graph: bool = False
     ddp_bucket_cap_mb: int | None = 256
+    use_zero1: bool = False
     optimizer_master_weights: bool = True
+
+    predict_subtask: bool = False
+    subtask_lookup_filename: str = "subtask_lookup.jsonl"
+    sample_outside_intervals: bool = False
+    subtask_in_user_stream: bool = False
+
+    condition_on_mistake: bool = True
 
     use_speed_metadata: bool = True
     speed_bin_width: int = 100
@@ -122,6 +142,12 @@ class TrainConfig:
     save_steps: int = 5000
     logging_steps: int = 20
     save_optimizer_state: bool = True
+
+    val_dataset: str | None = None
+    val_freq: int = 500
+    val_batches: int = 4
+    val_batch_size: int = 128
+    val_seed: int = 42
 
     def __post_init__(self):
         if isinstance(self.dataset, tuple):
@@ -143,6 +169,8 @@ class TrainConfig:
                     f"external_policy={self.external_policy!r} is single-frame "
                     f"(no history); got history_k={self.history_k!r}."
                 )
+            if self.vl_datasets:
+                raise ValueError("external policies have no VL co-training path.")
         if not 0.0 <= self.mirror_prob <= 1.0:
             raise ValueError(f"mirror_prob must be in [0, 1], got {self.mirror_prob!r}")
         if self.mirror_prob > 0.0:
@@ -156,6 +184,22 @@ class TrainConfig:
             raise ValueError(
                 "state_encoding='adaln' requires state_mlp_embodiments (the pooled "
                 "per-embodiment state MLP is the cond source)."
+            )
+        if (
+            self.max_cameras is None
+            and self.drop_static_wrist_camera
+            and not self.drop_extra_side_cameras
+        ):
+            raise ValueError(
+                "max_cameras=None with drop_static_wrist_camera requires "
+                "drop_extra_side_cameras=True to bound the camera count (a multi-side dataset "
+                "would otherwise feed every side view). Enable it or set an explicit max_cameras."
+            )
+        if self.subtask_in_user_stream and not self.predict_subtask:
+            raise ValueError("subtask_in_user_stream=True requires predict_subtask=True.")
+        if self.val_dataset and self.val_freq <= 0:
+            raise ValueError(
+                "val_dataset is set but val_freq<=0 disables validation; set val_freq>0"
             )
         if self.ema_decay is None:
             self.ema_decay = 0.999

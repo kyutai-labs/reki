@@ -1,10 +1,9 @@
-# Reference pretraining recipe of kyutai/reki-2b.
-# The pretraining code that runs it comes in a later update.
+# Pretraining config.
 vlm_model_id: Qwen/Qwen3.5-2B
 dataset:
 - oxe_reduced
 - droid
-- agibot
+- agibot_world_2026
 - robomind
 - galaxea
 - roboset_delta
@@ -21,7 +20,7 @@ chunk_duration_s: 1.0
 action_pace:
   egodex: 0.6
   egoverse: 0.25
-language_diversity_path: scripts/data/language_diversity_reannotated.json
+language_diversity_path: scripts/data/language_diversity.json
 vision_diversity_path: scripts/data/vision_diversity.json
 vision_alpha: 0.35
 max_epochs_per_dataset: 4
@@ -83,10 +82,10 @@ drop_static_wrist_camera: true
 action_expert_num_registers: 32
 ddp_find_unused_parameters: true
 ddp_bucket_cap_mb: 256
-# The pretraining run sharded the optimizer state with ZeRO-1, which this release does not include.
+use_zero1: true
 optimizer_master_weights: true
 predict_subtask: true
-subtask_lookup_filename: subtask_lookup_reannotated.jsonl
+condition_on_mistake: true
 use_speed_metadata: true
 save_steps: 5000
 logging_steps: 20

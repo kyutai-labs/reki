@@ -53,6 +53,8 @@ class RekiConfig:
     action_expert_num_layers: int = 10
     action_expert_num_heads: int = 12
 
+    ce_loss_weight: float = 0.1
+
     history_k: int = 3
     use_camera_role_tokens: bool = True
     action_expert_num_registers: int = 32

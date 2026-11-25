@@ -18,7 +18,9 @@ def test_eval_state_feed_mirrors_the_train_state_flip(monkeypatch: pytest.Monkey
     from reki.data.robotics.registry import DATASETS, DELTA_EE, DatasetSpec
     from reki.inference.features import prep_eval_state
 
-    spec = DatasetSpec("Test", DELTA_EE, {}, "single_arm_ee_euler", gripper_flip_state=[7])
+    spec = DatasetSpec(
+        "Test", DELTA_EE, {}, "single_arm_ee_euler", gripper_flip_state=[7], robot_type="franka"
+    )
     monkeypatch.setitem(DATASETS, "state_flip", spec)
     stats = {"qk01": torch.full((8,), -1.0), "qk99": torch.ones(8)}
     raw = torch.linspace(-0.8, 0.8, 8)

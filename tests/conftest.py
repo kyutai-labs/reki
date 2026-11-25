@@ -29,25 +29,11 @@ QWEN = "Qwen/Qwen3.5-2B"
 
 def robot_dataset(dataset: str, **overrides: Any) -> Any:
     """``make_robotics_dataset`` over ``dataset`` with a ``TrainConfig`` of ``overrides`` and
-    deterministic sample options unless overridden."""
-    from reki.data.robotics.factory import make_robotics_dataset
+    the validation sample options (no dropout, augmentation or mirroring) unless overridden."""
+    from reki.data.robotics.factory import VALIDATION_SETTINGS, make_robotics_dataset
     from reki.policy.train_config import TrainConfig
 
-    kw: dict[str, Any] = dict(
-        dataset=dataset,
-        vlm_model_id=QWEN,
-        state_dropout_prob=0.0,
-        speed_dropout_prob=0.0,
-        embodiment_dropout_prob=0.0,
-        fps_dropout_prob=0.0,
-        camera_dropout_prob=0.0,
-        mirror_prob=0.0,
-        pin_overhead_camera=True,
-        shuffle_cameras=False,
-        aug_color_jitter=None,
-        aug_random_crop=None,
-        aug_random_scale=False,
-    )
+    kw: dict[str, Any] = dict(dataset=dataset, vlm_model_id=QWEN, **VALIDATION_SETTINGS)
     ds, _, _ = make_robotics_dataset(TrainConfig(**{**kw, **overrides}), [dataset])
     return ds
 
@@ -112,7 +98,17 @@ LEAF_SPECS: dict[str, LeafSpec] = {
             "observation.images.robot0_agentview_right",
         ),
     ),
+    "xperience": LeafSpec(
+        "egocentric_raw/xperience_lerobot_v30/xperience_00",
+        "human_hand",
+        20,
+        12,
+        32,
+        ("observation.images.camera_top",),
+    ),
 }
+"""An egocentric (``human_hand``) leaf has, in every 20 frames, both hands untracked (zero) on
+frames 0-5 and the left hand untracked on frames 6-7."""
 TASK = "put the white mug on the left plate"
 
 
@@ -163,6 +159,10 @@ def _write_leaf(root: Path, name: str, n_episodes: int, n_frames: int, seed: int
                 q = rng.uniform(0.0, 0.04)
                 state[6:8] = [q, -q]
                 action[6] = rng.choice([-1.0, 1.0])
+            if spec.robot_type == "human_hand" and len(actions) % 20 < 8:
+                action[0:16] = 0
+                if len(actions) % 20 < 6:
+                    action[16:32] = 0
             frame: dict[str, Any] = {
                 cam: rng.integers(0, 256, (24, 32, 3), dtype=np.uint8) for cam in spec.cameras
             }
@@ -270,6 +270,7 @@ TINY_EXPERT: dict[str, Any] = dict(
 def synthetic_group(tiny_lerobot_leaf: Callable[..., Path]) -> Callable[..., tuple[Any, dict]]:
     """``make(k=3, **cfg)`` → ``(train_cfg, group)``: a K-frame register group (``group_items``)
     built by the real dataset pipeline from a tiny libero leaf (random images/state/action)."""
+    from reki.data.robotics.combined_dataset import CombinedLeRobotDataset
     from reki.data.robotics.factory import make_combined_dataset
     from reki.policy.train_config import TrainConfig
 
@@ -299,7 +300,8 @@ def synthetic_group(tiny_lerobot_leaf: Callable[..., Path]) -> Callable[..., tup
         kw.update(overrides)
         cfg = TrainConfig(**kw)
         ds, _sampler = make_combined_dataset(cfg)
-        for i in range(len(ds)):  # type: ignore[arg-type]
+        assert isinstance(ds, CombinedLeRobotDataset)
+        for i in range(len(ds)):
             item = ds[i]
             if len(item.get("group_items", [])) == k:
                 return cfg, item

@@ -34,6 +34,13 @@ import torch
 logger = logging.getLogger(__name__)
 
 _installed = False
+
+
+class VideoDecodeError(OSError):
+    """torchcodec could not open or decode a video file (corrupt or truncated). torchcodec
+    raises a bare RuntimeError; this type lets the dataset retry only decode failures."""
+
+
 original_video_check: Any = None
 """LeRobot's ``_check_cached_episodes_sufficient``, kept by ``install_lerobot_patches``."""
 
@@ -117,7 +124,11 @@ class _BoundedDecoderCache:
                 self._cache.move_to_end(video_path)
                 return self._cache[video_path][0]
             file_handle = fsspec.open(video_path).__enter__()
-            decoder = VideoDecoder(file_handle, seek_mode="approximate")
+            try:
+                decoder = VideoDecoder(file_handle, seek_mode="approximate")
+            except BaseException:
+                file_handle.close()
+                raise
             self._cache[video_path] = (decoder, file_handle)
             while len(self._cache) > self._maxsize:
                 _, (_, old_handle) = self._cache.popitem(last=False)
@@ -207,14 +218,14 @@ def _decode_video_frames_torchcodec_uint8(
     if decoder_cache is None:
         decoder_cache = _bounded_decoder_cache
 
-    decoder = decoder_cache.get_decoder(str(video_path))
+    try:
+        decoder = decoder_cache.get_decoder(str(video_path))
+        frame_indices = [round(ts * decoder.metadata.average_fps) for ts in timestamps]
+        frames_batch = decoder.get_frames_at(indices=frame_indices)
+    except RuntimeError as e:
+        raise VideoDecodeError(f"torchcodec could not decode {video_path}: {e}") from e
     loaded_ts: list[float] = []
     loaded_frames: list[torch.Tensor] = []
-
-    metadata = decoder.metadata
-    average_fps = metadata.average_fps
-    frame_indices = [round(ts * average_fps) for ts in timestamps]
-    frames_batch = decoder.get_frames_at(indices=frame_indices)
 
     for frame, pts in zip(frames_batch.data, frames_batch.pts_seconds, strict=True):
         loaded_frames.append(frame)

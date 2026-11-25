@@ -40,6 +40,7 @@ def leaf_norm_stats(name: str, leaf: Path, train_cfg: TrainConfig) -> tuple[Feat
     unify = train_cfg.unify_ee_euler_rotation
     stats = prepare_leaf_stats(
         leaf_meta_stats(name, leaf),
+        name=name,
         root=leaf,
         action_rot_rep=spec.action_rot_rep if unify else None,
         state_rot_rep=spec.state_rot_rep if unify else None,
@@ -70,9 +71,9 @@ def trained_leaves(dataset: str, train_cfg: TrainConfig) -> list[Path]:
     """Leaf dirs of ``dataset``, which the checkpoint must have been trained on
     (``train_cfg.dataset``)."""
     from reki.data.robotics.lerobot_io import training_leaves
-    from reki.data.robotics.registry import expand_spec
+    from reki.data.robotics.registry import spec_names
 
-    trained = expand_spec(train_cfg.dataset)
+    trained = spec_names(train_cfg.dataset)
     if dataset not in trained:
         raise ValueError(f"checkpoint was trained on {sorted(trained)}, not {dataset!r}")
     return [p for _, p in training_leaves([dataset])]
@@ -146,9 +147,9 @@ def _state_layout(info: dict[str, Any]) -> str:
 def dataset_fields(dataset: str, leaves: list[Path], train_cfg: TrainConfig) -> DatasetFields:
     """Embodiment, prompt fields, cameras, fps and state layout of ``dataset``, from the
     registry and the leaves' ``meta/info.json``, as ``CombinedLeRobotDataset`` sets them.
-    Leaves that disagree on fps, state dim, robot type or cameras raise."""
+    Leaves that disagree on fps, state dim or cameras raise."""
     from reki.data.robotics.cameras import CAMERA_KEY_TO_INDEX, select_top_cameras
-    from reki.data.robotics.registry import AXIS_ANGLE, canon_robot_type
+    from reki.data.robotics.registry import AXIS_ANGLE
 
     if not leaves:
         raise ValueError(f"{dataset}: no leaves")
@@ -160,7 +161,6 @@ def dataset_fields(dataset: str, leaves: list[Path], train_cfg: TrainConfig) -> 
         (
             float(i["fps"]),
             i["features"][OBS_STATE]["shape"][0],
-            canon_robot_type(i.get("robot_type"), dataset) or str(i.get("robot_type")),
             tuple(
                 select_top_cameras(
                     spec.cameras, train_cfg.max_cameras, available=set(i["features"])
@@ -170,10 +170,8 @@ def dataset_fields(dataset: str, leaves: list[Path], train_cfg: TrainConfig) -> 
         for i in infos
     }
     if len(per_leaf) != 1:
-        raise ValueError(
-            f"{dataset}: leaves differ in (fps, state dim, robot type, cameras): {per_leaf}"
-        )
-    fps, state_dim, robot_type, dataset_cams = next(iter(per_leaf))
+        raise ValueError(f"{dataset}: leaves differ in (fps, state dim, cameras): {per_leaf}")
+    fps, state_dim, dataset_cams = next(iter(per_leaf))
     cams = [spec.cameras[k] for k in dataset_cams]
     if not cams:
         raise ValueError(f"{dataset}: no camera of the leaves is in DATASETS[{dataset!r}].cameras")
@@ -191,7 +189,7 @@ def dataset_fields(dataset: str, leaves: list[Path], train_cfg: TrainConfig) -> 
         euler_rot_dims = list(blocks[0])
     return DatasetFields(
         embodiment=embodiment or "",
-        robot_type=robot_type,
+        robot_type=spec.robot_type,
         control_mode=spec.control_mode,
         camera_keys=[c.rsplit(".", 1)[-1] for c in cams],
         camera_indices=None if indices == list(range(len(indices))) else indices,

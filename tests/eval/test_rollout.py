@@ -259,3 +259,23 @@ def test_each_eval_gets_its_own_triton_cache(
     set_compile_cache_dir(str(tmp_path / "inductor"))
     assert first != os.environ["TRITON_CACHE_DIR"]
     assert Path(first).is_dir() and Path(first).parent == tmp_path
+
+
+def test_compile_cache_ignores_the_inductor_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Importing torch._dynamo sets $TORCHINDUCTOR_CACHE_DIR to the Inductor default under /tmp
+    (torch >= 2.9): the eval still uses the shared cache. A directory the user set wins."""
+    from torch._inductor.runtime import cache_dir_utils
+
+    from reki.eval.rollout import workers
+
+    monkeypatch.setenv("TRITON_CACHE_DIR", str(tmp_path / "triton"))
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setattr(tempfile, "tempdir", None)
+    monkeypatch.setattr(workers, "DEFAULT_COMPILE_CACHE_DIR", tmp_path / "shared")
+    default = cache_dir_utils.default_cache_dir()  # pyright: ignore[reportPrivateImportUsage]
+    monkeypatch.setenv("TORCHINDUCTOR_CACHE_DIR", default)
+    assert workers.set_compile_cache_dir(None) == (tmp_path / "shared").resolve()
+    monkeypatch.setenv("TORCHINDUCTOR_CACHE_DIR", str(tmp_path / "user"))
+    assert workers.set_compile_cache_dir(None) == (tmp_path / "user").resolve()

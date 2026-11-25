@@ -66,7 +66,7 @@ def _policy_and_batch(
 
 
 def _frame_bounds(policy: Any, batch: dict) -> tuple[torch.Tensor, torch.Tensor]:
-    actions, _pad, _ri, _af, cs = policy.prepare_action(batch)
+    actions, _pad, _ri, _af, cs, _loss_mask = policy.prepare_action(batch)
     cu = torch.zeros(cs.shape[0] + 1, dtype=torch.long, device=DEVICE)
     cu[1:] = cs.to(DEVICE).long().cumsum(0)
     return actions, cu
