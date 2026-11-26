@@ -67,6 +67,13 @@ class Qwen3_5Preprocessor:
                 f"camera-role token IDs {sorted(CAMERA_ROLE_TOKEN_IDS.values())} collide with "
                 f"the tokenizer vocabulary ({len(tok)} tokens)"
             )
+        self.asst_end_tokens = [tok.convert_tokens_to_ids("<|im_end|>")]
+        self.assistant_header_ids = tok("<|im_start|>assistant\n", add_special_tokens=False)[
+            "input_ids"
+        ]
+        self.subtask_header_ids = tok("<|im_start|>subtask\n", add_special_tokens=False)[
+            "input_ids"
+        ]
         self.image_pad_id = tok.convert_tokens_to_ids("<|image_pad|>")
         self.video_pad_id = tok.convert_tokens_to_ids("<|video_pad|>")
         self.vision_start_id = tok.convert_tokens_to_ids("<|vision_start|>")

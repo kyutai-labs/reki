@@ -29,11 +29,13 @@ def structured_prompt(
     fps: float,
     mode: str | None = None,
     speed_bin: int | None = None,
+    success: bool | None = None,
     drop_embodiment: bool = False,
     drop_fps: bool = False,
 ) -> str:
-    """The task prompt with one ``field: value`` per line: embodiment, instruction, speed, fps
-    and control mode (joint or delta end-effector actions). Embodiment and fps can be dropped."""
+    """The task prompt with one ``field: value`` per line: embodiment, instruction, speed, fps,
+    control mode (joint or delta end-effector actions) and success (failed attempts). Embodiment
+    and fps can be dropped."""
     lines: list[str] = []
     if not drop_embodiment:
         lines.append(f"embodiment: {robot_type}")
@@ -44,4 +46,6 @@ def structured_prompt(
         lines.append(f"fps: {round(fps)}")
     if mode:
         lines.append(f"control mode: {mode}")
+    if success is not None:
+        lines.append(f"success: {'true' if success else 'false'}")
     return "\n".join(lines) + "\n"

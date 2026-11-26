@@ -3,7 +3,7 @@
 | Config | Use |
 |---|---|
 | [`configs/sft.yaml`](../configs/sft.yaml) | finetuning config, shared by all finetuning runs, initialized from `kyutai/reki-2b` |
-| [`configs/cpt.yaml`](../configs/cpt.yaml) | pretraining config of `kyutai/reki-2b`, initialized from `Qwen/Qwen3.5-2B` |
+| [`configs/cpt.yaml`](../configs/cpt.yaml) | pretraining config of REKI, initialized from `Qwen/Qwen3.5-2B` |
 
 [`launchers/sft.py`](../launchers/sft.py), [`sft_3n.py`](../launchers/sft_3n.py) and
 [`sft_4n.py`](../launchers/sft_4n.py) add the settings of each finetuning run. Every other
@@ -66,7 +66,7 @@ pixi run python launchers/sft.py select 0 results                    # success r
 - The jobs run with `--resume=True`, so a resubmitted job continues the run.
 - `submit` downloads the models into the Hugging Face cache first. The compute nodes must see
   `HF_HOME`.
-- To finetune from your own pretraining run, set `PRETRAINED` in `launchers/sft.py`.
+- To finetune from your own pretrained checkpoint, set `PRETRAINED` in `launchers/sft.py`.
 - [`launchers/sft_scratch.py`](../launchers/sft_scratch.py) runs LIBERO and RoboTwin clean
   without pretraining: from `Qwen/Qwen3.5-2B`, with a 5,000-step warmup and 30k / 40k steps.
 - [evaluation.md](evaluation.md) describes the `eval` and `results` verbs.
@@ -87,7 +87,7 @@ the model:
 | Parameters | Learning rate |
 |---|---|
 | action expert (layers and register tokens), state MLPs | 1e-4 (`lr`) |
-| VLM text stack, LM head, action and time projections | `lr × backbone_lr_scale`: 0.1 in pretraining, 0.3 in finetuning ([per run](#finetuning-runs)) |
+| VLM text stack, LM head, action and time projections | `lr × backbone_lr_scale`: 0.1 in pretraining, 0.3 in finetuning ([per run](#finetuning)) |
 | last 4 vision blocks (`train_vision_blocks: 4`) | `lr × backbone_lr_scale` |
 | other vision blocks | frozen |
 
@@ -113,18 +113,31 @@ Gradients are clipped at 1.0. The evaluation and the released models use the EMA
 
 **Sampling.** The sampler picks a dataset by its sampling probability, then a random frame of
 that dataset. This frame is the last frame of the window. In finetuning, the probability of a dataset is proportional to the square root of its
-frame count (`frames_alpha: 0.5`). The pretraining probabilities are in
-[data.md](data.md#pretraining-mixture). The probabilities are then capped so that no dataset is
-seen more than `max_epochs_per_dataset` times (4 in pretraining, 100 in finetuning).
+frame count (`frames_alpha: 0.5`). In pretraining, it is also multiplied by
+`(L / median L)^0.5` and `(V / median V)^0.35`, with L and V the language and vision diversity
+scores of the dataset in `scripts/data/language_diversity.json` and
+`scripts/data/vision_diversity.json` (`language_alpha`, `vision_alpha`). A dataset that you add
+to the pretraining mixture needs both scores: `scripts/data/compute_language_diversity.py` and
+`scripts/data/compute_vision_diversity.py` compute them. The pretraining probabilities are in
+[pretraining_data.md](pretraining_data.md#pretraining-mixture). The probabilities are then
+capped so that no dataset is seen more than `max_epochs_per_dataset` times (4 in pretraining, 100 in finetuning).
 
 **Batch size.** `batch_size` (30) is an upper bound per GPU. Packing drops whole windows from the
 end until the tokens fit in `max_text_tokens` ([architecture.md](architecture.md#training)). The batch
 size of an optimizer step is these windows × GPUs × gradient accumulation
-([finetuning runs](#finetuning-runs)).
+([finetuning](#finetuning)).
 Gradient checkpointing (`gradient_checkpointing: true`) recomputes the activations of the VLM
 and action-expert layers in the backward pass.
 
-## Finetuning runs
+**Format.** `dataset` is a list, a group or dataset name, or a comma-joined string of names.
+Data paths in the configs are relative to the repository. The datasets are read under
+`REKI_DATASETS_ROOT`.
+
+**State MLPs.** `state_mlp_embodiments` lists the state formats of the run's data
+([data.md](data.md#state-formats)). A format of the start checkpoint loads its trained MLP and
+must keep its dim. A new format gets a new MLP, trained from scratch.
+
+## Finetuning
 
 All runs start from `kyutai/reki-2b`.
 
@@ -172,12 +185,18 @@ pixi run python scripts/export_checkpoint.py runs/my_robot/checkpoint-30000 expo
     --merge-ema --pretrained-path kyutai/reki-2b --dataset <your_dataset>
 ```
 
-## Config rules
+## Pretraining
 
-**Format.** `configs/cpt.yaml` is the reference recipe of `kyutai/reki-2b`; the pretraining code that runs it comes in a later update. `dataset` is
-a list, a group or dataset name, or a comma-joined string of names. Data paths in the configs are
-relative to the repository. The datasets are read under `REKI_DATASETS_ROOT`.
+To pretrain REKI from `Qwen/Qwen3.5-2B` with `configs/cpt.yaml` (200,000 steps, 32 H100 GPUs):
 
-**State MLPs.** `state_mlp_embodiments` lists the state formats of the run's data
-([data.md](data.md#state-formats)). A format of the start checkpoint loads its trained MLP and
-must keep its dim. A new format gets a new MLP, trained from scratch.
+1. Build every group of the [Build](pretraining_data.md#build) table, `vl` included.
+2. Build the `libero` validation data ([data.md](data.md#benchmark-datasets)).
+3. If you change `chunk_duration_s` or `action_pace` (the factor that slows the human-hand
+   actions to the speed of the robot data, from `scripts/data/measure_action_pace.py`), run
+   `stats egodex,egoverse,xperience --config <your config>` again.
+4. Submit:
+
+   ```bash
+   pixi run python launchers/cpt.py select 0 submit
+   ```
+

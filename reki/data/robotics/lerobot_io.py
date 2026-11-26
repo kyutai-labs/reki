@@ -16,6 +16,9 @@ from reki.data.robotics.registry import DATASETS
 from reki.paths import datasets_root
 from reki.utils.dist_utils import is_rank_zero
 
+_UNMAPPED_PRINTED: set[str] = set()
+"""Datasets whose unused cameras are already printed (once per dataset, not per leaf)."""
+
 
 def dataset_root(name: str) -> Path:
     """The directory that holds a single-repo dataset (the datasets root for an unknown name)."""
@@ -37,12 +40,14 @@ def is_collection(name: str) -> bool:
 
 def find_collection_leaves(name: str) -> list[Path]:
     """The per-task LeRobot repos (``<task>/meta/info.json``) directly under a collection.
-    Source directories suffixed ``_old`` by the v2.1-to-v3.0 converter are skipped."""
+    Source directories suffixed ``_old`` by the v2.1-to-v3.0 converter and hidden directories
+    are skipped."""
     root = collection_root(name)
     leaves = [
         info.parent.parent
         for info in sorted(root.glob("*/meta/info.json"))
         if not info.parent.parent.name.endswith("_old")
+        and not info.parent.parent.name.startswith(".")
     ]
     if not leaves:
         raise FileNotFoundError(f"No LeRobot leaves for collection '{name}' under {root}")
@@ -53,12 +58,19 @@ def find_lerobot_dir(name: str, root: Path | None = None) -> Path:
     """The LeRobot directory of a single-repo dataset under ``root`` (default:
     ``dataset_root(name)``).
 
-    Candidates are ``<name>_*`` directories with ``_lerobot`` in their name and
+    ``<root>/<dir>`` when the spec names its folder (``DatasetSpec.dir``). Otherwise the
+    candidates are ``<name>_*`` directories with ``_lerobot`` in their name and
     ``<root>/<name>`` itself. Converter source directories suffixed ``_old`` are excluded.
     When several exist, the one with the highest ``codebase_version`` wins.
     """
     if root is None:
         root = dataset_root(name)
+    folder = DATASETS[name].dir if name in DATASETS else None
+    if folder is not None:
+        path = root / folder
+        if not (path / "meta" / "info.json").exists():
+            raise FileNotFoundError(f"No LeRobot dataset for '{name}': {path}/meta/info.json")
+        return path
     candidates: list[Path] = []
     for candidate in root.glob(f"{name}_*"):
         if not candidate.is_dir():
@@ -124,7 +136,8 @@ def load_lerobot_dir(name: str, lerobot_dir: Path, **kwargs: Any) -> Any:
             )
         for k in [k for k in ds.meta.video_keys if k not in mapped]:
             del ds.meta.features[k]
-        if unmapped and is_rank_zero():
+        if unmapped and is_rank_zero() and name not in _UNMAPPED_PRINTED:
+            _UNMAPPED_PRINTED.add(name)
             print(f"{name}: cameras not in DATASETS[{name!r}].cameras are not used: {unmapped}")
 
     return ds

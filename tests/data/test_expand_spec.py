@@ -14,8 +14,19 @@ def test_missing_datasets_name_their_root(tiny_lerobot_leaf: Callable[..., Path]
     from reki.data.robotics.registry import expand_spec
 
     root = tiny_lerobot_leaf("robotwin2_clean").parents[1]
-    assert expand_spec("robotwin") == ["robotwin2_clean"]
+    assert expand_spec("robotwin2_clean") == ["robotwin2_clean"]
     with pytest.raises(FileNotFoundError) as err:
         expand_spec("robotwin2_clean,libero")
     assert str(root / "HuggingFaceVLA") in str(err.value)
     assert "docs/data.md#benchmark-datasets" in str(err.value)
+
+
+def test_group_with_a_missing_member_raises(tiny_lerobot_leaf: Callable[..., Path]) -> None:
+    from reki.data.robotics.registry import expand_spec, spec_names
+
+    tiny_lerobot_leaf("robotwin2_clean")
+    with pytest.raises(FileNotFoundError) as err:
+        expand_spec("robotwin")
+    assert "robotwin2_randomized" in str(err.value)
+    assert "'robotwin2_clean'" not in str(err.value)
+    assert spec_names("robotwin") == ["robotwin2_clean", "robotwin2_randomized"]

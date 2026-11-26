@@ -1,5 +1,6 @@
 """Adapters for external policies with the REKI training loop (no adapter ships here). The
-data, split, batch, schedule and optimizer are the same as for REKI. Only the model changes.
+data, split, batch, schedule, optimizer and validation flow loss are the same as for REKI.
+Only the model changes.
 
 To add a model, add one file here with a ``@register_external`` class and import it in
 ``__init__.py``.
@@ -50,7 +51,7 @@ class ExternalPolicy(nn.Module, ABC):
     def forward(
         self, batch: dict[str, Any], reduction: str = "mean"
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        """The training loss and its named components."""
+        """``(loss, {"flow_loss": ...})``. ``val_flow_loss`` reads ``flow_loss``."""
 
     @abstractmethod
     def freeze_vision_blocks(self, train_vision_blocks: int) -> None:

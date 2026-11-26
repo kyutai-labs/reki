@@ -90,3 +90,12 @@ def test_averaged_band_that_clips_is_flagged(tmp_path: Path):
     stats = {ACTION: {"qk01": torch.tensor([10.0]), "qk99": torch.tensor([20.0])}}
     v = band_clipping_violation("d", root, stats, (ACTION,))
     assert len(v) == 1 and "per-episode AVERAGE" in v[0] and "100.0%" in v[0]
+
+
+def test_band_errors_name_the_pretraining_stats_command() -> None:
+    from reki.data.robotics.normalization import check_norm_bands, quantile_keys
+
+    with pytest.raises(RuntimeError, match=r"(?s)pretrain_data\.py stats <dataset>.*augment_q"):
+        check_norm_bands(["leaf: action band"], [], [], [], ())
+    with pytest.raises(KeyError, match=r"(?s)pretrain_data\.py stats <dataset>.*augment_q"):
+        quantile_keys({})

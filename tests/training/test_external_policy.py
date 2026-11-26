@@ -1,4 +1,5 @@
-"""The external-policy path trains through ``scripts/train.py`` on raw items."""
+"""The external-policy path: a registered adapter trains through ``scripts/train.py`` on raw
+items (unnormalized state/action, decoded RGB)."""
 
 from __future__ import annotations
 
@@ -126,11 +127,13 @@ def test_external_config_validation() -> None:
 
 
 def test_external_items_are_raw(tiny_lerobot_leaf: Callable[..., Path], tmp_path: Path) -> None:
+    from reki.data.robotics.combined_dataset import CombinedLeRobotDataset
     from reki.data.robotics.factory import make_combined_dataset
 
     tiny_lerobot_leaf(DATASET)
     cfg = TrainConfig(**_overrides(tmp_path / "run"))
     ds, _sampler = make_combined_dataset(cfg)
+    assert isinstance(ds, CombinedLeRobotDataset)
     item = ds[0]
 
     assert set(item) >= {OBS_STATE, ACTION, "task", "external_images"}

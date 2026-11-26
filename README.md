@@ -19,6 +19,9 @@
 
 ## News
 
+- **2026-11-26:** We released the data curation and pretraining code of REKI, with all
+  pretraining data from public sources ([docs/pretraining_data.md](docs/pretraining_data.md),
+  [docs/training.md](docs/training.md)).
 - **2026-10-20:** We published REKI on PyPI as `reki-vla` (`pip install reki-vla`), with
   inference support for the finetuned models. We moved from PyTorch 2.7 to 2.10 so that REKI no
   longer requires compiled CUDA extensions (`flash-attn` and `causal-conv1d`).
@@ -51,8 +54,9 @@ VLM layer through cross-attention and predicts a 1 s action chunk with flow matc
 | Document | Content |
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | model architecture: VLM, action expert, register tokens, state conditioning, training samples and inference |
-| [docs/training.md](docs/training.md) | configs, recipe, finetuning on your robot, export |
-| [docs/data.md](docs/data.md) | pretraining mixture, state formats, normalization, adding a dataset |
+| [docs/training.md](docs/training.md) | configs, finetuning on your robot, export |
+| [docs/pretraining_data.md](docs/pretraining_data.md) | pretraining mixture and how to build it |
+| [docs/data.md](docs/data.md) | state formats, normalization, adding a dataset |
 | [docs/evaluation.md](docs/evaluation.md) | benchmarks, protocols, metrics, sim servers |
 
 ## Results
@@ -100,9 +104,9 @@ together.
 
 ## Released models
 
-| Model | Stage | Robot | Benchmark | Recipe | Model card |
+| Model | Stage | Robot | Benchmark | Config | Model card |
 |---|---|---|---|---|---|
-| [`kyutai/reki-2b`](https://huggingface.co/kyutai/reki-2b) | Pretrained | [pretraining mixture](docs/data.md#pretraining-mixture) | — | [`cpt.yaml`](configs/cpt.yaml) | [card](https://huggingface.co/kyutai/reki-2b) |
+| [`kyutai/reki-2b`](https://huggingface.co/kyutai/reki-2b) | Pretrained | [pretraining mixture](docs/pretraining_data.md#pretraining-mixture) | — | [`cpt.yaml`](configs/cpt.yaml) | [card](https://huggingface.co/kyutai/reki-2b) |
 | [`kyutai/reki-2b-libero`](https://huggingface.co/kyutai/reki-2b-libero) | Finetuned | Franka Panda | LIBERO, LIBERO-Plus | [`sft.py`](launchers/sft.py) `libero` | [card](https://huggingface.co/kyutai/reki-2b-libero) |
 | [`kyutai/reki-2b-robotwin-clean`](https://huggingface.co/kyutai/reki-2b-robotwin-clean) | Finetuned | ALOHA (bimanual) | RoboTwin Clean2Rand | [`sft.py`](launchers/sft.py) `robotwin_clean` | [card](https://huggingface.co/kyutai/reki-2b-robotwin-clean) |
 | [`kyutai/reki-2b-robotwin-cleanrand`](https://huggingface.co/kyutai/reki-2b-robotwin-cleanrand) | Finetuned | ALOHA (bimanual) | RoboTwin 2.0, clean + randomized scenes | [`sft_3n.py`](launchers/sft_3n.py) `robotwin_cleanrand` | [card](https://huggingface.co/kyutai/reki-2b-robotwin-cleanrand) |
@@ -240,8 +244,8 @@ your own robot and the checkpoint export.
 
 ### Train your own model
 
-`scripts/train.py` can train another policy with the same data, sampling, schedule and optimizer.
-Only the model changes.
+`scripts/train.py` can train another policy with the same data, sampling, schedule, optimizer and
+validation. Only the model changes.
 
 1. Subclass `ExternalPolicy` and `ExternalDatasetPreprocessor`
    ([`reki/policy/external/base.py`](reki/policy/external/base.py) lists the methods).
@@ -289,17 +293,14 @@ python -m lerobot.async_inference.robot_client --server_address=localhost:8080 \
 ## Pretraining
 
 REKI starts from Qwen3.5-2B and is pretrained for 200,000 steps on 32 GPUs
-([`configs/cpt.yaml`](configs/cpt.yaml)). The mixture holds 1.0B frames of real-robot
-teleoperation, simulation and egocentric human video, plus 12.2M vision-language samples
-([docs/data.md](docs/data.md#pretraining-mixture)). The robot sources are filtered before
-training, as in Qwen-RobotManip ([Yuan et al., 2026](https://arxiv.org/abs/2606.17846)):
-channel selection, degenerate episodes, sudden jumps, annotation review and convention
-correction.
+with [`configs/cpt.yaml`](configs/cpt.yaml). The mixture holds 0.9B frames of real-robot
+teleoperation, simulation and egocentric human video, plus 12.2M vision-language rows
+([docs/pretraining_data.md](docs/pretraining_data.md#pretraining-mixture)). The state and action
+channels of the robot sources are selected, their conventions are unified, and duplicate, frozen
+and sudden-jump episodes are excluded from training.
 
-We will release the pretraining code and data pipeline in a later update.
-[`configs/cpt.yaml`](configs/cpt.yaml) holds the full recipe, and
-[docs/training.md](docs/training.md) gives it in words: the loss, the learning rates of each
-parameter group, the schedule and the augmentation.
+To pretrain, build the data ([docs/pretraining_data.md](docs/pretraining_data.md)), then
+train ([docs/training.md](docs/training.md#pretraining)).
 
 ## Tests
 
@@ -323,12 +324,12 @@ pixi run pytest tests               # all tiers
 reki/            model, data pipeline, inference API
 lerobot_plugin/  LeRobot policy plugin (lerobot_policy_reki)
 launchers/       Slurm launchers and evaluation protocols
-configs/         finetuning config
+configs/         pretraining and finetuning configs
 scripts/         training, dry run, checkpoint export
   eval/          sim evaluation, sim servers, results table, video viewer
   deploy/        real-robot policy server and dummy client
-  data/          benchmark dataset download, conversion, checks
-docs/            architecture, training, data, evaluation
+  data/          pretraining data pipeline, benchmark dataset download, conversion, checks
+docs/            architecture, training, data, pretraining data, evaluation
 tests/           tests (cpu, hf and gpu tiers)
 ```
 
@@ -341,7 +342,7 @@ tests/           tests (cpu, hf and gpu tiers)
 
 - Code: MIT ([LICENSE](LICENSE)). Two files and parts of one file come from LeRobot, and parts
   of three files from Transformers, under Apache-2.0 ([NOTICE](NOTICE), [LICENSE-APACHE](LICENSE-APACHE)).
-- Weights: [CC-BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/). The weights
+- Weights: [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/). The weights
   derive from Qwen3.5-2B and third-party datasets. Each keeps its own license.
 
 ## Citation
@@ -364,5 +365,5 @@ REKI builds on [Qwen3.5](https://huggingface.co/Qwen/Qwen3.5-2B),
 [LIBERO](https://github.com/Lifelong-Robot-Learning/LIBERO),
 [LIBERO-Plus](https://github.com/sylvestf/LIBERO-plus),
 [RoboTwin 2.0](https://github.com/RoboTwin-Platform/RoboTwin) and
-[RoboCasa](https://github.com/robocasa/robocasa). [docs/data.md](docs/data.md#sources)
-lists the training data sources.
+[RoboCasa](https://github.com/robocasa/robocasa).
+[docs/pretraining_data.md](docs/pretraining_data.md#pretraining-mixture) lists the training data sources.

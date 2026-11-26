@@ -15,9 +15,58 @@ import numpy as np
 import torch
 
 from reki.data.robotics.mirror import MirrorSpec
-from reki.data.robotics.registry import AXIS_ANGLE
+from reki.data.robotics.registry import AXIS_ANGLE, DATASETS
 from reki.data.robotics.transforms import gather_with_pad
 from reki.policy.constants import ACTION, OBS_STATE
+
+EGO_WRIST_DIMS = [*range(0, 6), *range(16, 22)]
+"""The action dims of the two egocentric wrists (translation + axis-angle), whose band is the
+camera-frame one of the ego wrist sidecar."""
+
+
+def ego_wrist_sidecar(chunk_duration_s: float | None, chunk_size: int, pace: float) -> str:
+    """File name of the ego wrist band for a training horizon (``chunk_duration_s``, else
+    ``chunk_size`` frames) and action pace."""
+    horizon = f"{chunk_duration_s:g}s" if chunk_duration_s is not None else f"{chunk_size}f"
+    return f"norm_stats_ego_wrist_{horizon}_pace{pace:g}.json"
+
+
+def apply_ego_wrist_stats(
+    stats: dict[str, dict[str, torch.Tensor]],
+    root: Path,
+    *,
+    name: str,
+    chunk_duration_s: float | None,
+    chunk_size: int,
+    window: int,
+    fps: float,
+    pace: float,
+) -> None:
+    """Stamp the camera-frame wrist band of the training horizon into ``stats[ACTION]``
+    (``qk01/qk99`` on ``EGO_WRIST_DIMS``). Raises with the command that writes it when the
+    sidecar is missing or was computed for another window, fps or pace."""
+    path = root / "meta" / ego_wrist_sidecar(chunk_duration_s, chunk_size, pace)
+    command = (
+        f"pixi run -e data python scripts/data/pretrain_data.py stats {name} "
+        "--config <your training config>"
+    )
+    if not path.exists():
+        raise FileNotFoundError(f"{path} is missing. Write it with:\n  {command}")
+    side = json.loads(path.read_text())
+    want = {"window": window, "fps": fps, "pace": pace}
+    got = {k: side.get(k) for k in want}
+    if got != want:
+        raise ValueError(f"{path} was computed for {got}, training needs {want}. Run:\n  {command}")
+    for key in ("qk01", "qk99"):
+        band = stats[ACTION][key].clone()
+        band[EGO_WRIST_DIMS] = torch.as_tensor(side[key], dtype=band.dtype)
+        stats[ACTION][key] = band
+
+
+PRETRAIN_STATS_HINT = (
+    "for a pretraining dataset: pixi run -e data python scripts/data/pretrain_data.py stats "
+    "<dataset> (see docs/pretraining_data.md); for another dataset: "
+)
 
 
 def quantile_keys(stats: dict[str, torch.Tensor]) -> tuple[str, str]:
@@ -25,8 +74,9 @@ def quantile_keys(stats: dict[str, torch.Tensor]) -> tuple[str, str]:
     missing."""
     if "qk01" not in stats or "qk99" not in stats:
         raise KeyError(
-            f"stats have no qk01/qk99 band: {sorted(stats)}. Run "
-            "scripts/data/augment_quantiles.py (see docs/data.md, Normalization)."
+            f"stats have no qk01/qk99 band: {sorted(stats)}. Run, "
+            + PRETRAIN_STATS_HINT
+            + "scripts/data/augment_quantiles.py (see docs/data.md, Normalization)."
         )
     return "qk01", "qk99"
 
@@ -54,6 +104,7 @@ def normalize_sample(
 def prepare_leaf_stats(
     raw_stats: dict,
     *,
+    name: str,
     root: Path,
     action_rot_rep: str | None,
     state_rot_rep: str | None,
@@ -61,7 +112,8 @@ def prepare_leaf_stats(
 ) -> dict[str, dict[str, torch.Tensor]]:
     """One leaf's ``meta.stats`` as training normalizes it, before mirroring and slicing: the
     euler sidecar replaces the stats of an axis-angle feature (the roll-recentered sidecar with
-    ``recenter_roll``)."""
+    ``recenter_roll``), and the gripper band of a dataset with a ``gripper_unit_index`` is
+    re-stamped to its physical unit."""
     stats = {k: {s: torch.as_tensor(v) for s, v in sv.items()} for k, sv in raw_stats.items()}
     aa_keys = [
         k for k, rep in ((ACTION, action_rot_rep), (OBS_STATE, state_rot_rep)) if rep == AXIS_ANGLE
@@ -71,6 +123,9 @@ def prepare_leaf_stats(
         for k in aa_keys:
             if k in euler:
                 stats[k] = {s: torch.as_tensor(v) for s, v in euler[k].items()}
+    gi = DATASETS[name].gripper_unit_index if name in DATASETS else None
+    if gi is not None:
+        apply_gripper_unit(stats, gi)
     return stats
 
 
@@ -91,6 +146,24 @@ def slice_leaf_stats(
             k: v if v.numel() == 1 else v[action_slice] for k, v in stats[ACTION].items()
         }
     return stats
+
+
+def apply_gripper_unit(ds_stats: dict, gi: int) -> None:
+    """Rescale the gripper qk01/qk99 band to the physical full-open value, in place.
+
+    The collection-wide qk01/qk99 band is (0, 1) on every leaf, which crushes the leaves that
+    store the gripper in metres to a dead sliver (full-open 0.08 m → −0.84). Re-stamp
+    (0, full_open) at RAW index ``gi`` for ACTION and OBS_STATE so that every leaf's full-open
+    maps to +1; the state slice downstream moves it to the canonical slot. ``full_open`` is 1.0
+    (a 0/1 flag) or 0.08 m, inferred from the leaf's own max (so a leaf that never fully opens
+    still gets the right unit)."""
+    for feat in (ACTION, OBS_STATE):
+        s = ds_stats.get(feat)
+        if s is not None and s["max"].numel() > gi:
+            hi = 1.0 if float(s["max"][gi]) > 0.5 else 0.08
+            if "qk01" in s and "qk99" in s:
+                s["qk01"][gi] = 0.0
+                s["qk99"][gi] = hi
 
 
 def load_euler_stats(root: Path, recenter_roll: bool = False) -> dict[str, dict[str, list]]:
@@ -300,8 +373,10 @@ def check_norm_bands(
             "These absolute-control bands are lerobot's mean of per-episode quantiles, not a "
             "global quantile, and clip far more than the ~2% of a real 1/99 band:\n  "
             + "\n  ".join(band_violations)
-            + "\n\nFix: pixi run python scripts/data/augment_quantiles.py --leaves "
-            "<collection root> --global (one repo: --leaf <dir> --overwrite)."
+            + "\n\nFix, "
+            + PRETRAIN_STATS_HINT
+            + "pixi run python scripts/data/augment_quantiles.py --leaves <collection root> "
+            "--global (one repo: --leaf <dir> --overwrite)."
         )
     violations = find_absolute_norm_violations(names, control_modes, per_ds_stats, cols)
     if violations:
@@ -309,8 +384,10 @@ def check_norm_bands(
             "Absolute-control datasets need the same qk01/qk99 in every leaf, but these differ "
             "per leaf (one pose would normalize to different values):\n  "
             + "\n  ".join(violations)
-            + "\n\nFix: pixi run python scripts/data/augment_quantiles.py --leaves "
-            "<collection root> --global (see docs/data.md, Normalization)."
+            + "\n\nFix, "
+            + PRETRAIN_STATS_HINT
+            + "pixi run python scripts/data/augment_quantiles.py --leaves <collection root> "
+            "--global (see docs/data.md, Normalization)."
         )
 
 

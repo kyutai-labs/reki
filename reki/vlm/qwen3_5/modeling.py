@@ -100,6 +100,9 @@ class ExpertForwardState:
     """Expert rows per block: register rows + action rows."""
     expert_is_register: torch.Tensor | None = None
     """[N] True on register rows (training; None at inference)."""
+    expert_user_mask: torch.Tensor | None = None
+    """[total_L] user-turn tokens: the VLM rows the expert attends, and the anchor of its MRoPE
+    start (training)."""
     expert_frame_pos: torch.Tensor | None = None
     """Per owner sample: its frame index in the history group (training)."""
     reg_kv_flat_idx: torch.Tensor | None = None
@@ -608,6 +611,30 @@ class Qwen3_5VLMWithExpert(Qwen3_5ExpertInference, nn.Module):
         mrope_positions = torch.stack([frame, slot, slot], dim=0).unsqueeze(1)
         return self.text_backbone.rotary_emb(reference_hidden, mrope_positions)  # type: ignore[attr-defined]
 
+    def _post_user_expert_starts(
+        self, seq_lens: torch.Tensor, expert_starts: list[int]
+    ) -> list[int]:
+        """Per-sample expert MRoPE start right after the user turn: ``max(position over
+        user-turn tokens) + 1`` over all three MRoPE axes, the position the expert gets at
+        inference, where the prompt holds only the user turn. Samples without an assistant
+        turn are unchanged."""
+        assert self.fwd.position_ids is not None and self.fwd.expert_user_mask is not None
+        pos = self.fwd.position_ids[:, 0]
+        user_mask = self.fwd.expert_user_mask.to(pos.device).bool()
+        n = seq_lens.shape[0]
+        sample_idx = torch.repeat_interleave(
+            torch.arange(n, device=pos.device),
+            seq_lens.to(pos.device).long(),
+            output_size=pos.shape[-1],
+        )
+        tok_max = torch.where(user_mask, pos.amax(dim=0), pos.new_full((), -1))
+        user_max = pos.new_full((n,), -1).scatter_reduce(0, sample_idx, tok_max, reduce="amax")
+        out = list(expert_starts)
+        for i, m in enumerate(user_max.tolist()):
+            assert m >= 0, f"_post_user_expert_starts: sample {i} has no user-stream token"
+            out[i] = int(m) + 1
+        return out
+
     def register_memory_attention(
         self,
         e_attn: Any,
@@ -687,8 +714,9 @@ class Qwen3_5VLMWithExpert(Qwen3_5ExpertInference, nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int, torch.Tensor, torch.Tensor]:
         """Gather the expert's cross-attention source.
 
-        Rows of the final-layer VLM output of each owner sample. The indices and the rows'
-        MRoPE cos/sin depend on neither τ nor the layer, so they are cached per forward in
+        Rows of the final-layer VLM output of each owner sample, restricted to
+        ``fwd.expert_user_mask`` (its user turn) when set. The indices and the rows' MRoPE
+        cos/sin depend on neither τ nor the layer, so they are cached per forward in
         ``fwd.cross_attn``; the rows themselves are re-gathered from ``vlm_out`` on every
         call, to stay in the autograd graph.
         Returns (src [S, H_vlm], cu_src, src_counts, max_src, s_cos, s_sin).
@@ -701,6 +729,8 @@ class Qwen3_5VLMWithExpert(Qwen3_5ExpertInference, nn.Module):
                 torch.arange(seq_lens.shape[0], device=seq_lens.device), seq_lens
             )
             own = sample_idx.unsqueeze(0) == robot_indices.to(device).unsqueeze(1)
+            if fw.expert_user_mask is not None:
+                own = own & fw.expert_user_mask.to(device)
             src_counts = own.sum(dim=1).to(torch.int32)
             assert int(src_counts.min().item()) > 0, "a virtual sample has an empty CA source"
             flat_idx = own.nonzero(as_tuple=False)[:, 1]
@@ -862,6 +892,8 @@ class Qwen3_5VLMWithExpert(Qwen3_5ExpertInference, nn.Module):
         if expert_hidden is not None and robot_indices is not None:
             ri_action = robot_indices
             assert expert_starts_all is not None
+            if fw.expert_user_mask is not None:
+                expert_starts_all = self._post_user_expert_starts(seq_lens, expert_starts_all)
             cs_per_sample = fw.cs_per_sample
             assert cs_per_sample is not None, "the expert needs fwd.cs_per_sample"
             row_off = (

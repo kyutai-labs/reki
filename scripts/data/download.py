@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Download the raw inputs of the released recipe (SFT benchmarks).
+"""Download the raw inputs of the benchmark datasets of the released finetuning config (SFT).
 
     pixi run --frozen python scripts/data/download.py --list
     pixi run --frozen python scripts/data/download.py <dataset> [--out <dir>] [--dry_run]

@@ -1,1 +1,1 @@
-"""Data loading: robot datasets (``robotics``)."""
+"""Data loading: robot datasets (``robotics``) and vision-language datasets (``text``)."""

@@ -9,6 +9,8 @@ pixi run --frozen python scripts/data/<script>.py
 See [the data guide](../../docs/data.md) for dataset paths, registration, and the exact
 per-dataset steps in the "Benchmark datasets" table.
 
+For the pretraining data, see [docs/pretraining_data.md](../../docs/pretraining_data.md).
+
 For released benchmark datasets, download the raw inputs (`download.py` for LIBERO and
 RoboCasa365, `hf download` for RoboTwin), then run the preparation script:
 `prepare_robotwin.py` or `prepare_robocasa365.py`. These convert to
@@ -21,6 +23,8 @@ For your own data, follow [Onboarding a dataset](../../docs/data.md#onboarding-a
 
 ## Reference
 
+- `pretrain_data.py` builds the pretraining data of `configs/cpt.yaml`; `pretrain/` holds one
+  reader per source, the pins and the lists of excluded episodes.
 - `download.py` downloads the raw LIBERO and RoboCasa365 inputs.
 - `prepare_*.py` convert and prepare the released RoboTwin and RoboCasa datasets.
 - `build_v30.py` rebuilds v2.x metadata in the repository's v3.0 layout.
@@ -28,5 +32,10 @@ For your own data, follow [Onboarding a dataset](../../docs/data.md#onboarding-a
 - `recompute_euler_stats.py` writes euler-space normalization sidecars for axis-angle data.
 - `derive_libero_mirror_axis.py` measures LIBERO's stored left-right EE-position axis.
 - `check_datasets.py` runs opt-in registry and real-data sanity checks.
+- `measure_action_pace.py` measures the egocentric `action_pace` against the robot EE speed.
+- `compute_language_diversity.py` writes the language diversity scores of the sampling weights
+  (`language_diversity_path`).
+- `compute_vision_diversity.py` writes the vision diversity scores (`vision_diversity_path`).
+- `make_val_split.py` writes the held-out validation episodes of a dataset (`val_dataset`).
 - `shared.py` contains conversion, quantile, and rotation helpers used by these scripts.
 - `sbatch/` contains Slurm launchers for the expensive preparation and stats jobs.

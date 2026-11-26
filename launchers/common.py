@@ -200,8 +200,13 @@ def warm_hf_cache(model_id: str) -> None:
     """Download a Hub model on the submit node. The jobs run with ``HF_HUB_OFFLINE=1``: they
     read it from the cache and send no request to the Hub."""
     from huggingface_hub import snapshot_download
+    from huggingface_hub.errors import LocalEntryNotFoundError
 
-    if not os.path.isdir(model_id):
+    if os.path.isdir(model_id):
+        return
+    try:
+        snapshot_download(model_id, local_files_only=True)
+    except LocalEntryNotFoundError:
         snapshot_download(model_id)
 
 
@@ -348,16 +353,17 @@ class RekiGrid(JobGrid):
         from reki.data.robotics.registry import expand_spec
         from reki.policy.checkpoint import resolve_checkpoint
 
+        config = yaml.safe_load((REPO / self.config).read_text())
         for exp in self:
             try:
-                expand_spec(str(exp.kwargs["dataset"]))
+                expand_spec(exp.kwargs["dataset"] if "dataset" in exp.kwargs else config["dataset"])
             except FileNotFoundError as e:
                 raise SystemExit(str(e)) from None
             except RuntimeError as e:
                 raise SystemExit(f"{e}\nsee docs/data.md#benchmark-datasets") from None
         for path in {str(p) for exp in self if (p := exp.kwargs.get("pretrained_path"))}:
             resolve_checkpoint(path)
-        warm_hf_cache(yaml.safe_load((REPO / self.config).read_text())["vlm_model_id"])
+        warm_hf_cache(config["vlm_model_id"])
 
     def submit(self, *args: Any, **kwargs: Any) -> None:
         self.preflight()
